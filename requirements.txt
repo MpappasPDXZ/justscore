@@ -5,3 +5,6 @@ azure-storage-blob
 pandas
 pyarrow
 duckdb
+adlfs
+fsspec
+aiohttp
