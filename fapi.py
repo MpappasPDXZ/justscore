@@ -5,6 +5,7 @@ import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
+import duckdb
 
 app = FastAPI()
 
@@ -83,25 +84,34 @@ async def create_team(team_data: TeamMetadata):
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        # Initialize DuckDB
+        con = duckdb.connect()
         
-        # Get blob client for the metadata file
-        blob_name = f"team_{team_id}/project_metadata.parquet"
-        blob_client = container_client.get_blob_client(blob_name)
+        # Create connection string
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         
-        # Download the blob
-        blob_data = blob_client.download_blob().readall()
+        # Register Azure credentials
+        con.execute(f"""
+            SET azure_storage_connection_string='{connection_string}';
+        """)
         
-        # Read parquet from memory
-        parquet_file = BytesIO(blob_data)
-        df = pd.read_parquet(parquet_file)
+        # Query specific team's metadata
+        query = f"""
+            SELECT *
+            FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
+        """
+        
+        # Execute query and fetch results
+        result = con.execute(query).fetchdf()
+        
+        if len(result) == 0:
+            raise HTTPException(status_code=404, detail=f"No data found for team_{team_id}")
         
         return {
             "team_id": team_id,
-            "metadata": df.to_dict(orient='records')[0]
+            "metadata": result.to_dict(orient='records')[0]
         }
-        
+    
     except Exception as e:
         raise HTTPException(
             status_code=404, 
