@@ -5,7 +5,6 @@ import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
-import duckdb
 
 app = FastAPI()
 
@@ -84,74 +83,30 @@ async def create_team(team_data: TeamMetadata):
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        # Check if environment variables are set
-        if not ACCOUNT_NAME or not ACCOUNT_KEY:
-            raise HTTPException(
-                status_code=500,
-                detail="Azure storage credentials not properly configured"
-            )
-
-        try:
-            # Initialize DuckDB
-            con = duckdb.connect()
-            
-            # Install and load required extensions
-            con.execute("""
-                INSTALL httpfs;
-                LOAD httpfs;
-            """)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to initialize DuckDB: {str(e)}"
-            )
-
-        # Create connection string
-        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        # Create blob service client
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
-        try:
-            # Configure DuckDB with Azure credentials
-            con.execute(f"""
-                SET azure_storage_connection_string='{connection_string}';
-            """)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to configure Azure storage in DuckDB: {str(e)}"
-            )
-
-        # Query specific team's metadata
-        query = f"""
-            SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
-        """
+        # Get blob client for the metadata file
+        blob_name = f"team_{team_id}/project_metadata.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
         
-        try:
-            # Execute query and fetch results
-            result = con.execute(query).fetchdf()
-        except Exception as e:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Failed to read parquet file for team_{team_id}: {str(e)}"
-            )
-
-        if len(result) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No data found for team_{team_id}"
-            )
+        # Download the blob
+        blob_data = blob_client.download_blob().readall()
+        
+        # Read parquet from memory
+        parquet_file = BytesIO(blob_data)
+        df = pd.read_parquet(parquet_file)
         
         return {
             "team_id": team_id,
-            "metadata": result.to_dict(orient='records')[0]
+            "metadata": df.to_dict(orient='records')[0]
         }
-    
-    except HTTPException:
-        raise
+        
     except Exception as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error: {str(e)}"
+            status_code=404, 
+            detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
         )
 @app.get("/list_teams")
 async def list_teams():
