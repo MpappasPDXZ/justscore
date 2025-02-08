@@ -84,38 +84,68 @@ async def create_team(team_data: TeamMetadata):
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        # Initialize DuckDB
-        con = duckdb.connect()
-        
+        # Check if environment variables are set
+        if not ACCOUNT_NAME or not ACCOUNT_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="Azure storage credentials not properly configured"
+            )
+
+        try:
+            # Initialize DuckDB
+            con = duckdb.connect()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize DuckDB: {str(e)}"
+            )
+
         # Create connection string
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         
-        # Register Azure credentials
-        con.execute(f"""
-            SET azure_storage_connection_string='{connection_string}';
-        """)
-        
-        # Query specific team's metadata
+        try:
+            # Register Azure credentials
+            con.execute(f"""
+                SET azure_storage_connection_string='{connection_string}';
+            """)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to configure Azure storage in DuckDB: {str(e)}"
+            )
+
+        # Rest of your existing code...
         query = f"""
             SELECT *
             FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
         """
         
-        # Execute query and fetch results
-        result = con.execute(query).fetchdf()
-        
+        try:
+            # Execute query and fetch results
+            result = con.execute(query).fetchdf()
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to read parquet file for team_{team_id}: {str(e)}"
+            )
+
         if len(result) == 0:
-            raise HTTPException(status_code=404, detail=f"No data found for team_{team_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No data found for team_{team_id}"
+            )
         
         return {
             "team_id": team_id,
             "metadata": result.to_dict(orient='records')[0]
         }
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
-            status_code=404, 
-            detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
         )
 
 @app.get("/list_teams")
