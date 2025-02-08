@@ -85,8 +85,6 @@ async def read_metadata(team_id: str):
         con.execute("""
             INSTALL httpfs;
             LOAD httpfs;
-            SET enable_http_metadata_cache=true;
-            SET enable_object_cache=true;
         """)
         
         # Parse connection string components
@@ -96,11 +94,9 @@ async def read_metadata(team_id: str):
         # Create connection string
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         
-        # Register Azure credentials with SSL settings
+        # Register Azure credentials
         con.execute(f"""
             SET azure_storage_connection_string='{connection_string}';
-            SET s3_url_style='path';
-            SET verify_ssl_certificate=false;
         """)
         
         # Query parquet files using wildcard
@@ -111,6 +107,9 @@ async def read_metadata(team_id: str):
         
         # Execute query and fetch results
         result = con.execute(query).fetchdf()
+        
+        if len(result) == 0:
+            raise HTTPException(status_code=404, detail=f"No data found for team_{team_id}")
         
         return {
             "team_id": team_id,
