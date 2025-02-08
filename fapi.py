@@ -11,6 +11,27 @@ app = FastAPI()
 CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 CONTAINER_NAME = "justscorecontainer"
 
+def get_next_team_number():
+    # Create blob service client
+    blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+    
+    # List all "folders" (virtual directories)
+    blobs = container_client.list_blobs(name_starts_with='team_')
+    team_numbers = []
+    
+    # Extract team numbers from paths
+    for blob in blobs:
+        try:
+            # Extract number from path like 'team_1/', 'team_2/', etc.
+            team_num = int(blob.name.split('/')[0].replace('team_', ''))
+            team_numbers.append(team_num)
+        except:
+            continue
+    
+    # Return next number (max + 1), or 1 if no teams exist
+    return max(team_numbers + [0]) + 1
+
 class TeamData(BaseModel):
     team_type: str  # Changed from Literal to str
     team_name: str
@@ -57,3 +78,7 @@ async def write_parquet(team_data: TeamData):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+def read_root():
+    return {"message": "FastAPI welcomes you to a fast and furious world!"}
