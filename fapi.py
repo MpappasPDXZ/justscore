@@ -80,24 +80,25 @@ async def read_metadata(team_id: str):
     try:
         # Initialize DuckDB
         con = duckdb.connect()
-        # Register Azure credentials and configure SSL
+        
+        # Register Azure credentials
         con.execute(f"""
             SET azure_storage_connection_string='{CONNECTION_STRING}';
-            SET azure_storage_prefer_sign_url=true;
         """)
+        
         # Query specific team's metadata
         query = f"""
             SELECT *
             FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
         """
+        
         # Execute query and fetch results
         result = con.execute(query).fetchdf()
+        
         return {
             "team_id": team_id,
             "metadata": result.to_dict(orient='records')[0]
         }
+    
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Team {team_id} not found or error reading metadata: {str(e)}")
-@app.get("/")
-def read_root():
-    return {"message": "FastAPI Team Management API"}
