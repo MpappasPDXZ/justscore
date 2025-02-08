@@ -81,19 +81,18 @@ async def read_metadata(team_id: str):
         # Initialize DuckDB
         con = duckdb.connect()
         
-        # Register Azure credentials
+        # Parse connection string for explicit credentials
+        conn_parts = dict(part.split('=', 1) for part in CONNECTION_STRING.split(';') if part)
+        account_name = conn_parts.get('AccountName')
+        account_key = conn_parts.get('AccountKey')
+        
+        # Set Azure credentials explicitly
         con.execute(f"""
-            SET azure_storage_connection_string='{CONNECTION_STRING}';
+            INSTALL azure;
+            LOAD azure;
+            SET azure_account_name='{account_name}';
+            SET azure_access_key='{account_key}';
         """)
-        
-        # Add error checking for file existence
-        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        blob_path = f"team_{team_id}/project_metadata.parquet"
-        
-        # Check if blob exists
-        if not any(blob.name == blob_path for blob in container_client.list_blobs(name_starts_with=f"team_{team_id}/")):
-            raise HTTPException(status_code=404, detail=f"No metadata file found for team_{team_id}")
         
         # Query specific team's metadata
         query = f"""
@@ -109,8 +108,6 @@ async def read_metadata(team_id: str):
             "metadata": result.to_dict(orient='records')[0]
         }
     
-    except HTTPException as he:
-        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading metadata: {str(e)}")
     
