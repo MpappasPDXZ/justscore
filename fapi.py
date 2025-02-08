@@ -94,6 +94,12 @@ async def read_metadata(team_id: str):
         try:
             # Initialize DuckDB
             con = duckdb.connect()
+            
+            # Install and load required extensions
+            con.execute("""
+                INSTALL httpfs;
+                LOAD httpfs;
+            """)
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -104,9 +110,13 @@ async def read_metadata(team_id: str):
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         
         try:
-            # Register Azure credentials
+            # Configure DuckDB with Azure credentials and SSL settings
             con.execute(f"""
                 SET azure_storage_connection_string='{connection_string}';
+                SET s3_url_style='path';
+                SET enable_http_metadata_cache=true;
+                SET enable_object_cache=true;
+                SET verify_ssl_certificates=false;
             """)
         except Exception as e:
             raise HTTPException(
@@ -114,7 +124,7 @@ async def read_metadata(team_id: str):
                 detail=f"Failed to configure Azure storage in DuckDB: {str(e)}"
             )
 
-        # Rest of your existing code...
+        # Query specific team's metadata
         query = f"""
             SELECT *
             FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
@@ -147,7 +157,6 @@ async def read_metadata(team_id: str):
             status_code=500,
             detail=f"Unexpected error: {str(e)}"
         )
-
 @app.get("/list_teams")
 async def list_teams():
     try:

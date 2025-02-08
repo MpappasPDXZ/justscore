@@ -8,3 +8,4 @@ duckdb
 adlfs
 fsspec
 aiohttp
+requests
