@@ -9,3 +9,4 @@ adlfs
 fsspec
 aiohttp
 requests
+certifi

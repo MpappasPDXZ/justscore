@@ -75,6 +75,17 @@ async def create_team(team_data: TeamMetadata):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+import os
+import duckdb
+import certifi
+from fastapi import FastAPI, HTTPException
+from azure.storage.blob import BlobServiceClient
+
+app = FastAPI()
+
+# Get the SSL cert path from certifi
+SSL_CERT_PATH = certifi.where()
+
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
@@ -85,6 +96,11 @@ async def read_metadata(team_id: str):
         con.execute("""
             INSTALL httpfs;
             LOAD httpfs;
+        """)
+        
+        # Set SSL certificate path
+        con.execute(f"""
+            SET ssl_certificate_file='{SSL_CERT_PATH}';
         """)
         
         # Parse connection string components
@@ -102,7 +118,7 @@ async def read_metadata(team_id: str):
         # Query parquet files using wildcard
         query = f"""
             SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/*.parquet')
+            FROM read_parquet('azure://justscorecontainer/team_{team_id}/*.parquet')
         """
         
         # Execute query and fetch results
