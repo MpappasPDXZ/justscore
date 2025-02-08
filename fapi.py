@@ -2,15 +2,20 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 import pandas as pd
-import duckdb
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
 
 app = FastAPI()
 
-CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+# Get Azure credentials from environment variables
+ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
+ACCOUNT_KEY = os.getenv('AZURE_STORAGE_KEY')
 CONTAINER_NAME = "justscorecontainer"
+
+def get_blob_service_client():
+    connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+    return BlobServiceClient.from_connection_string(connection_string)
 
 class TeamMetadata(BaseModel):
     team_name: str
@@ -21,7 +26,7 @@ class TeamMetadata(BaseModel):
     created_on: str  # format: 'mm-dd-yyyy'
 
 def get_next_team_number():
-    blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+    blob_service_client = get_blob_service_client()
     container_client = blob_service_client.get_container_client(CONTAINER_NAME)
     
     blobs = container_client.list_blobs(name_starts_with='team_')
@@ -56,7 +61,7 @@ async def create_team(team_data: TeamMetadata):
         parquet_buffer.seek(0)
         
         # Upload to Azure Blob Storage
-        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
         # Generate filename
@@ -75,23 +80,10 @@ async def create_team(team_data: TeamMetadata):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-import os
-import duckdb
-import certifi
-from fastapi import FastAPI, HTTPException
-from azure.storage.blob import BlobServiceClient
-
-app = FastAPI()
-
-# Get the SSL cert path from certifi
-SSL_CERT_PATH = certifi.where()
-
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        # Create blob service client
-        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
         # Get blob client for the metadata file
@@ -119,8 +111,7 @@ async def read_metadata(team_id: str):
 @app.get("/list_teams")
 async def list_teams():
     try:
-        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
         # List all team folders
