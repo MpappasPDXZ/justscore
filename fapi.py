@@ -81,22 +81,32 @@ async def read_metadata(team_id: str):
         # Initialize DuckDB
         con = duckdb.connect()
         
-        # Install and load httpfs extension for cloud storage
+        # Install and load required extensions
         con.execute("""
             INSTALL httpfs;
             LOAD httpfs;
+            SET enable_http_metadata_cache=true;
+            SET enable_object_cache=true;
         """)
         
-        # Set the Azure connection string
+        # Parse connection string components
+        ACCOUNT_NAME = "justscoresa"
+        ACCOUNT_KEY = "GUUcJpSTMvebKY0wMPos51Ap2bf6QvRmI8S8FuarKw5TK7JLVgjnLSVZ+NznZP/Bn926jRt6McPp+AStEwtQDQ=="
+        
+        # Create connection string
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        
+        # Register Azure credentials with SSL settings
         con.execute(f"""
-            SET azure_storage_connection_string='{CONNECTION_STRING}';
+            SET azure_storage_connection_string='{connection_string}';
+            SET s3_url_style='path';
+            SET verify_ssl_certificate=false;
         """)
         
-        # Query specific team's metadata
-        blob_path = f"azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet"
+        # Query parquet files using wildcard
         query = f"""
             SELECT *
-            FROM read_parquet('{blob_path}')
+            FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/*.parquet')
         """
         
         # Execute query and fetch results
@@ -112,7 +122,6 @@ async def read_metadata(team_id: str):
             status_code=500, 
             detail=f"Error reading metadata for team_{team_id}: {str(e)}"
         )
-    
 @app.get("/list_teams")
 async def list_teams():
     try:
