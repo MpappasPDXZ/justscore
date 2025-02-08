@@ -110,13 +110,9 @@ async def read_metadata(team_id: str):
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         
         try:
-            # Configure DuckDB with Azure credentials and SSL settings
+            # Configure DuckDB with Azure credentials
             con.execute(f"""
                 SET azure_storage_connection_string='{connection_string}';
-                SET s3_url_style='path';
-                SET enable_http_metadata_cache=true;
-                SET enable_object_cache=true;
-                SET verify_ssl_certificates=false;
             """)
         except Exception as e:
             raise HTTPException(
