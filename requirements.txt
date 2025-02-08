@@ -2,3 +2,6 @@ fastapi
 uvicorn
 pydantic
 gunicorn
+azure-storage-blob
+pandas
+pyarrow
