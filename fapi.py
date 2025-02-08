@@ -7,7 +7,7 @@ app = FastAPI()
 # Basic GET endpoint
 @app.get("/")
 def read_root():
-    return {"message": "Hello World from Git"}
+    return {"message": "Hello World from Git1"}
 
 # Path parameter example
 @app.get("/items/{item_id}")
