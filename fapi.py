@@ -86,6 +86,15 @@ async def read_metadata(team_id: str):
             SET azure_storage_connection_string='{CONNECTION_STRING}';
         """)
         
+        # Add error checking for file existence
+        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        blob_path = f"team_{team_id}/project_metadata.parquet"
+        
+        # Check if blob exists
+        if not any(blob.name == blob_path for blob in container_client.list_blobs(name_starts_with=f"team_{team_id}/")):
+            raise HTTPException(status_code=404, detail=f"No metadata file found for team_{team_id}")
+        
         # Query specific team's metadata
         query = f"""
             SELECT *
@@ -100,5 +109,25 @@ async def read_metadata(team_id: str):
             "metadata": result.to_dict(orient='records')[0]
         }
     
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Team {team_id} not found or error reading metadata: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading metadata: {str(e)}")
+    
+@app.get("/list_teams")
+async def list_teams():
+    try:
+        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # List all team folders
+        teams = set()
+        for blob in container_client.list_blobs():
+            if blob.name.startswith('team_'):
+                team_id = blob.name.split('/')[0]
+                teams.add(team_id)
+        
+        return {"teams": sorted(list(teams))}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing teams: {str(e)}")
