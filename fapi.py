@@ -89,58 +89,38 @@ SSL_CERT_PATH = certifi.where()
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        # Initialize DuckDB
-        con = duckdb.connect()
-        
-        # Install and load required extensions
-        con.execute("""
-            INSTALL httpfs;
-            LOAD httpfs;
-        """)
-        
-        # Set SSL certificate path
-        con.execute(f"""
-            SET ssl_certificate_file='{SSL_CERT_PATH}';
-        """)
-        
-        # Parse connection string components
-        ACCOUNT_NAME = "justscoresa"
-        ACCOUNT_KEY = "GUUcJpSTMvebKY0wMPos51Ap2bf6QvRmI8S8FuarKw5TK7JLVgjnLSVZ+NznZP/Bn926jRt6McPp+AStEwtQDQ=="
-        
-        # Create connection string
+        # Create blob service client
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
-        # Register Azure credentials
-        con.execute(f"""
-            SET azure_storage_connection_string='{connection_string}';
-        """)
+        # Get blob client for the metadata file
+        blob_name = f"team_{team_id}/project_metadata.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
         
-        # Query parquet files using wildcard
-        query = f"""
-            SELECT *
-            FROM read_parquet('azure://justscorecontainer/team_{team_id}/*.parquet')
-        """
+        # Download the blob
+        blob_data = blob_client.download_blob().readall()
         
-        # Execute query and fetch results
-        result = con.execute(query).fetchdf()
-        
-        if len(result) == 0:
-            raise HTTPException(status_code=404, detail=f"No data found for team_{team_id}")
+        # Read parquet from memory
+        parquet_file = BytesIO(blob_data)
+        df = pd.read_parquet(parquet_file)
         
         return {
             "team_id": team_id,
-            "metadata": result.to_dict(orient='records')[0]
+            "metadata": df.to_dict(orient='records')[0]
         }
-    
+        
     except Exception as e:
         raise HTTPException(
-            status_code=500, 
-            detail=f"Error reading metadata for team_{team_id}: {str(e)}"
+            status_code=404, 
+            detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
         )
+
 @app.get("/list_teams")
 async def list_teams():
     try:
-        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
         # List all team folders
@@ -153,4 +133,11 @@ async def list_teams():
         return {"teams": sorted(list(teams))}
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing teams: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error listing teams: {str(e)}"
+        )
+
+@app.get("/")
+def read_root():
+    return {"message": "FastAPI Team Management API"}
