@@ -81,23 +81,22 @@ async def read_metadata(team_id: str):
         # Initialize DuckDB
         con = duckdb.connect()
         
-        # Parse connection string for explicit credentials
-        conn_parts = dict(part.split('=', 1) for part in CONNECTION_STRING.split(';') if part)
-        account_name = conn_parts.get('AccountName')
-        account_key = conn_parts.get('AccountKey')
+        # Install and load httpfs extension for cloud storage
+        con.execute("""
+            INSTALL httpfs;
+            LOAD httpfs;
+        """)
         
-        # Set Azure credentials explicitly
+        # Set the Azure connection string
         con.execute(f"""
-            INSTALL azure;
-            LOAD azure;
-            SET azure_account_name='{account_name}';
-            SET azure_access_key='{account_key}';
+            SET azure_storage_connection_string='{CONNECTION_STRING}';
         """)
         
         # Query specific team's metadata
+        blob_path = f"azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet"
         query = f"""
             SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/team_{team_id}/project_metadata.parquet')
+            FROM read_parquet('{blob_path}')
         """
         
         # Execute query and fetch results
@@ -109,7 +108,10 @@ async def read_metadata(team_id: str):
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading metadata: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error reading metadata for team_{team_id}: {str(e)}"
+        )
     
 @app.get("/list_teams")
 async def list_teams():
