@@ -143,6 +143,8 @@ async def create_team_roster(team_id: str, roster: TeamRoster):
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
+        print("\n=== Starting get_team_roster ===")
+        print(f"Team ID: {team_id}")
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         blob_name = f"metadata/{team_id}.parquet"
@@ -170,9 +172,19 @@ async def get_team_roster(team_id: str):
         blob_data  = blob_client.download_blob().readall()
         parquet_file = BytesIO(blob_data)
         df = pd.read_parquet(parquet_file)
+        float_columns = [
+            'defensive_position_allocation_one',
+            'defensive_position_allocation_two',
+            'defensive_position_allocation_three'
+        ]
+        for col in float_columns:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else None)
+        
+        roster_dict = df.to_dict(orient='records')
         return {
             "team_id": team_id,
-            "roster": df.to_dict(orient='records')
+            "roster": roster_dict  # Use roster_dict instead of df.to_dict()
         }
     except Exception as e:
         raise HTTPException(
