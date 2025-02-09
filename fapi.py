@@ -179,6 +179,7 @@ async def read_metadata_duckdb():
     try:
         con = duckdb.connect()
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        con.execute("SET azure_transport_option_type = 'curl';")
         con.execute(f"""
             SET azure_storage_connection_string='{connection_string}';
         """)
