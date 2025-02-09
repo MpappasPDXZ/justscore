@@ -80,6 +80,10 @@ async def create_team(team_data: TeamMetadata):
         # Upload to Azure Blob Storage
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        # Create team folder (empty blob as folder marker)
+        folder_marker = f"{team_folder}/.folder"
+        folder_client = container_client.get_blob_client(folder_marker)
+        folder_client.upload_blob(b"", overwrite=True)
         # Upload metadata file with team number as name
         metadata_blob_name = f"metadata/{team_num}.parquet"
         metadata_client = container_client.get_blob_client(metadata_blob_name)
