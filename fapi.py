@@ -6,7 +6,7 @@ from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
 from typing import Optional
-
+import duckdb
 app = FastAPI()
 
 @app.get("/")
@@ -173,6 +173,37 @@ async def read_metadata(team_id: str):
             status_code=404, 
             detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
         )       
+    
+@app.get("/read_metadata_duckdb")
+async def read_metadata_duckdb():
+    try:
+        con = duckdb.connect()
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        con.execute(f"""
+            SET azure_storage_connection_string='{connection_string}';
+        """)
+        query = f"""
+            SELECT *
+            FROM read_parquet('azure://{CONTAINER_NAME}/metadata/*.parquet')
+            ORDER BY CAST(team_id AS INTEGER)
+        """
+        result = con.execute(query).fetchdf()
+        if result.empty:
+            return {
+                "message": "No teams found",
+                "metadata": []
+            }
+        
+        return {
+            "total_teams": len(result),
+            "metadata": result.to_dict(orient='records')
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reading metadata: {str(e)}"
+        )
     
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
