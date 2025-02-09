@@ -187,56 +187,53 @@ class Player(BaseModel):
 class TeamRoster(BaseModel):
     players: list[Player]
 
-@app.post("/teams/{team_id}/roster")
-async def create_team_roster(team_id: str, roster: TeamRoster):
+@app.get("/teams/{team_id}/roster")
+async def get_team_roster(team_id: str):
     try:
+        # Check if environment variables are set
+        if not ACCOUNT_NAME or not ACCOUNT_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="Azure storage credentials not properly configured"
+            )
+        
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         
-        # Convert roster to DataFrame and add team_id
-        players_data = [player.dict() for player in roster.players]
-        df = pd.DataFrame(players_data)
-        df['team_id'] = team_id  # Add team_id column
-        
-        # Ensure all columns exist with correct order
-        columns = [
-            'team_id',
-            'player_name',
-            'jersey_number',
-            'active',
-            'defensive_position_one',
-            'defensive_position_two',
-            'defensive_position_three',
-            'defensive_position_allocation_one',
-            'defensive_position_allocation_two',
-            'defensive_position_allocation_three'
-        ]
-        
-        # Reorder columns and fill missing values with None
-        df = df.reindex(columns=columns)
-        
-        # Convert DataFrame to Parquet
-        parquet_buffer = BytesIO()
-        df.to_parquet(parquet_buffer)
-        parquet_buffer.seek(0)
-        
-        # Upload roster file to team folder
+        # Get roster file from team folder
         blob_name = f"teams/team_{team_id}/roster.parquet"
+        
+        # Check if blob exists
         blob_client = container_client.get_blob_client(blob_name)
-        blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        if not blob_client.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No roster found for team_{team_id}"
+            )
         
-        return {
-            "message": f"Successfully created roster for team_{team_id}",
-            "team_id": team_id,
-            "player_count": len(roster.players)
-        }
+        try:
+            # Download and read the roster
+            blob_data = blob_client.download_blob().readall()
+            parquet_file = BytesIO(blob_data)
+            df = pd.read_parquet(parquet_file)
+            
+            return {
+                "team_id": team_id,
+                "roster": df.to_dict(orient='records')
+            }
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error reading roster parquet file: {str(e)}"
+            )
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error creating roster: {str(e)}"
+            detail=f"Unexpected error accessing roster for team_{team_id}: {str(e)}"
         )
-
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
     try:
