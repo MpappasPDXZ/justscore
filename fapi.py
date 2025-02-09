@@ -168,52 +168,72 @@ async def create_team_roster(team_id: str, roster: TeamRoster):
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
     try:
+        print(f"Attempting to get roster for team {team_id}")  # Debug log
+        
         # Check if environment variables are set
         if not ACCOUNT_NAME or not ACCOUNT_KEY:
+            print("Azure credentials missing")  # Debug log
             raise HTTPException(
                 status_code=500,
                 detail="Azure storage credentials not properly configured"
             )
+        
         try:
+            print("Connecting to Azure storage")  # Debug log
             blob_service_client = get_blob_service_client()
             container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         except Exception as e:
+            print(f"Azure connection error: {str(e)}")  # Debug log
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to connect to Azure storage: {str(e)}"
             )
+        
         # Get roster file from team folder
         blob_name = f"teams/team_{team_id}/roster.parquet"
+        print(f"Looking for blob: {blob_name}")  # Debug log
+        
         try:
             # Check if blob exists
             blob_client = container_client.get_blob_client(blob_name)
-            if not blob_client.exists():
+            exists = blob_client.exists()
+            print(f"Blob exists: {exists}")  # Debug log
+            
+            if not exists:
                 raise HTTPException(
                     status_code=404,
                     detail=f"No roster found for team_{team_id}"
                 )
         except Exception as e:
+            print(f"Error checking blob: {str(e)}")  # Debug log
             raise HTTPException(
                 status_code=500,
                 detail=f"Error checking if roster exists: {str(e)}"
             )
+        
         try:
+            print("Downloading blob")  # Debug log
             # Download and read the roster
             blob_data = blob_client.download_blob().readall()
             parquet_file = BytesIO(blob_data)
             df = pd.read_parquet(parquet_file)
+            print("Successfully read parquet file")  # Debug log
+            
             return {
                 "team_id": team_id,
                 "roster": df.to_dict(orient='records')
             }
         except Exception as e:
+            print(f"Error reading parquet: {str(e)}")  # Debug log
             raise HTTPException(
                 status_code=500,
                 detail=f"Error reading roster parquet file: {str(e)}"
             )
+        
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")  # Debug log
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {str(e)}"
