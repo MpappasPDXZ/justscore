@@ -43,24 +43,42 @@ CONTAINER_NAME = "justscorecontainer"
 def get_blob_service_client():
     connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
     return BlobServiceClient.from_connection_string(connection_string)
-
-def get_next_team_number():
-    blob_service_client = get_blob_service_client()
-    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-    
-    # Look in metadata folder for highest team number
-    blobs = container_client.list_blobs(name_starts_with='metadata/')
-    team_numbers = []
-    
-    for blob in blobs:
-        try:
-            # Extract number from filename (e.g., "metadata/3.parquet" -> 3)
-            team_num = int(blob.name.split('/')[-1].replace('.parquet', ''))
-            team_numbers.append(team_num)
-        except:
-            continue
-    
-    return max(team_numbers + [0]) + 1
+@app.get("/max_team_number")
+async def get_max_team_number():
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # List all team folders
+        blobs = container_client.list_blobs(name_starts_with='teams/team_')
+        team_numbers = []
+        
+        for blob in blobs:
+            try:
+                # Extract number from folder name (e.g., "teams/team_3/something" -> 3)
+                folder_name = blob.name.split('/')[1]  # gets "team_3"
+                team_num = int(folder_name.split('_')[1])  # gets "3"
+                team_numbers.append(team_num)
+            except:
+                continue
+        
+        if not team_numbers:
+            return {
+                "max_team_number": 0,
+                "message": "No teams found"
+            }
+        
+        max_num = max(team_numbers)
+        return {
+            "max_team_number": max_num,
+            "message": f"Highest team number is {max_num}"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error finding max team number: {str(e)}"
+        )
 
 @app.post("/create_team/")
 async def create_team(team_data: TeamMetadata):
@@ -143,8 +161,6 @@ async def create_team_roster(team_id: str, roster: TeamRoster):
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
-        print("\n=== Starting get_team_roster ===")
-        print(f"Team ID: {team_id}")
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         blob_name = f"metadata/{team_id}.parquet"
