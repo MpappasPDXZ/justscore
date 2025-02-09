@@ -5,8 +5,14 @@ import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
+from typing import Optional
 
 app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"message": "FastAPI Team Management API"}
+
 
 # Get Azure credentials from environment variables
 ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
@@ -167,7 +173,92 @@ async def read_metadata(team_id: str):
             detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
         )
 
+class Player(BaseModel):
+    player_name: str
+    jersey_number: str
+    active: str
+    defensive_position_one: Optional[str] = None
+    defensive_position_two: Optional[str] = None
+    defensive_position_three: Optional[str] = None
+    defensive_position_allocation_one: Optional[float] = None
+    defensive_position_allocation_two: Optional[float] = None
+    defensive_position_allocation_three: Optional[float] = None
 
-@app.get("/")
-def read_root():
-    return {"message": "FastAPI Team Management API"}
+class TeamRoster(BaseModel):
+    players: list[Player]
+
+@app.post("/teams/{team_id}/roster")
+async def create_team_roster(team_id: str, roster: TeamRoster):
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # Convert roster to DataFrame and add team_id
+        players_data = [player.dict() for player in roster.players]
+        df = pd.DataFrame(players_data)
+        df['team_id'] = team_id  # Add team_id column
+        
+        # Ensure all columns exist with correct order
+        columns = [
+            'team_id',
+            'player_name',
+            'jersey_number',
+            'active',
+            'defensive_position_one',
+            'defensive_position_two',
+            'defensive_position_three',
+            'defensive_position_allocation_one',
+            'defensive_position_allocation_two',
+            'defensive_position_allocation_three'
+        ]
+        
+        # Reorder columns and fill missing values with None
+        df = df.reindex(columns=columns)
+        
+        # Convert DataFrame to Parquet
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload roster file to team folder
+        blob_name = f"teams/team_{team_id}/roster.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": f"Successfully created roster for team_{team_id}",
+            "team_id": team_id,
+            "player_count": len(roster.players)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating roster: {str(e)}"
+        )
+
+@app.get("/teams/{team_id}/roster")
+async def get_team_roster(team_id: str):
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # Get roster file from team folder
+        blob_name = f"teams/team_{team_id}/roster.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
+        
+        # Download and read the roster
+        blob_data = blob_client.download_blob().readall()
+        parquet_file = BytesIO(blob_data)
+        df = pd.read_parquet(parquet_file)
+        
+        return {
+            "team_id": team_id,
+            "roster": df.to_dict(orient='records')
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Roster not found for team_{team_id}: {str(e)}"
+        )
