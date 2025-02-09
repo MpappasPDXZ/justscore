@@ -48,11 +48,8 @@ async def get_max_team_number():
     try:
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        
-        # List all team folders
         blobs = container_client.list_blobs(name_starts_with='teams/team_')
         team_numbers = []
-        
         for blob in blobs:
             try:
                 # Extract number from folder name (e.g., "teams/team_3/something" -> 3)
@@ -61,19 +58,18 @@ async def get_max_team_number():
                 team_numbers.append(team_num)
             except:
                 continue
-        
         if not team_numbers:
             return {
                 "max_team_number": 0,
+                "next_team_number": 1,
                 "message": "No teams found"
             }
-        
         max_num = max(team_numbers)
         return {
             "max_team_number": max_num,
-            "message": f"Highest team number is {max_num}"
+            "next_team_number": max_num + 1,
+            "message": f"Highest team number is {max_num}, next available is {max_num + 1}"
         }
-        
     except Exception as e:
         raise HTTPException(
             status_code=500,
