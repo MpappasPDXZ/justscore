@@ -197,18 +197,30 @@ async def get_team_roster(team_id: str):
                 detail="Azure storage credentials not properly configured"
             )
         
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        try:
+            blob_service_client = get_blob_service_client()
+            container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to connect to Azure storage: {str(e)}"
+            )
         
         # Get roster file from team folder
         blob_name = f"teams/team_{team_id}/roster.parquet"
         
-        # Check if blob exists
-        blob_client = container_client.get_blob_client(blob_name)
-        if not blob_client.exists():
+        try:
+            # Check if blob exists
+            blob_client = container_client.get_blob_client(blob_name)
+            if not blob_client.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No roster found for team_{team_id}"
+                )
+        except Exception as e:
             raise HTTPException(
-                status_code=404,
-                detail=f"No roster found for team_{team_id}"
+                status_code=500,
+                detail=f"Error checking if roster exists: {str(e)}"
             )
         
         try:
@@ -232,30 +244,5 @@ async def get_team_roster(team_id: str):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Unexpected error accessing roster for team_{team_id}: {str(e)}"
-        )
-@app.get("/teams/{team_id}/roster")
-async def get_team_roster(team_id: str):
-    try:
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        
-        # Get roster file from team folder
-        blob_name = f"teams/team_{team_id}/roster.parquet"
-        blob_client = container_client.get_blob_client(blob_name)
-        
-        # Download and read the roster
-        blob_data = blob_client.download_blob().readall()
-        parquet_file = BytesIO(blob_data)
-        df = pd.read_parquet(parquet_file)
-        
-        return {
-            "team_id": team_id,
-            "roster": df.to_dict(orient='records')
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Roster not found for team_{team_id}: {str(e)}"
+            detail=f"Unexpected error: {str(e)}"
         )
