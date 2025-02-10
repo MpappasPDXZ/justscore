@@ -80,7 +80,7 @@ async def get_max_team_number():
 async def create_team(team_data: TeamMetadata):
     try:
         # Get next team number
-        team_num = get_next_team_number()
+        team_num = get_max_team_number()
         team_folder = f"teams/team_{team_num}"
         # Add team_id to the data
         data_dict = team_data.dict()
