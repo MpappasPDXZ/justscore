@@ -40,7 +40,7 @@ class TeamRoster(BaseModel):
 
 # Get Azure credentials from environment variables
 ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
-ACCOUNT_KEY = os.getenv('AZURE_STORAGE_KEY')
+ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
 CONTAINER_NAME = "justscorecontainer"
 
 def get_blob_service_client():
@@ -83,7 +83,8 @@ async def get_max_team_number():
 async def create_team(team_data: TeamMetadata):
     try:
         # Get next team number
-        team_num = get_max_team_number()
+        max_team_info = await get_max_team_number()
+        team_num = max_team_info["next_team_number"]
         team_folder = f"teams/team_{team_num}"
         # Add team_id to the data
         data_dict = team_data.dict()
