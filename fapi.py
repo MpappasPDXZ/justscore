@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
+from typing import Literal, Optional
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
@@ -8,14 +9,21 @@ import os
 from typing import Optional
 import duckdb
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 app = FastAPI()
-
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 @app.get("/")
 def read_root():
     return {"message": "FastAPI Team Management API"}
-
 class TeamMetadata(BaseModel):
     team_name: str
     head_coach: str
@@ -23,20 +31,36 @@ class TeamMetadata(BaseModel):
     season: str
     session: str
     created_on: str  # format: 'mm-dd-yyyy'
+# Define valid defensive positions
+# Define valid defensive positions
+DefensivePosition = Literal[
+    'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'
+]
 
-class Player(BaseModel):
+class PlayerData(BaseModel):
     player_name: str
     jersey_number: str
-    active: str
-    defensive_position_one: Optional[str] = None
-    defensive_position_two: Optional[str] = None
-    defensive_position_three: Optional[str] = None
-    defensive_position_allocation_one: Optional[float] = None
-    defensive_position_allocation_two: Optional[float] = None
-    defensive_position_allocation_three: Optional[float] = None
+    active: str = "Y"  # Default to "Y"
+    defensive_position_one: DefensivePosition
+    defensive_position_two: Optional[DefensivePosition] = None
+    defensive_position_three: Optional[DefensivePosition] = None
+    defensive_position_allocation_one: str
+    defensive_position_allocation_two: Optional[str] = None
+    defensive_position_allocation_three: Optional[str] = None
 
+    @field_validator('defensive_position_allocation_one', 'defensive_position_allocation_two', 'defensive_position_allocation_three')
+    @classmethod
+    def validate_allocations(cls, v):
+        if v is not None:
+            try:
+                float_val = float(v)
+                if float_val < 0 or float_val > 1:
+                    raise ValueError('Allocation must be between 0 and 1')
+            except ValueError:
+                raise ValueError('Allocation must be a valid number between 0 and 1')
+        return v
 class TeamRoster(BaseModel):
-    players: list[Player]
+    players: list[PlayerData]
 
 # Get Azure credentials from environment variables
 ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
@@ -116,48 +140,6 @@ async def create_team(team_data: TeamMetadata):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/teams/{team_id}/roster")
-async def create_team_roster(team_id: str, roster: TeamRoster):
-    try:
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        # Convert roster to DataFrame and add team_id
-        players_data = [player.dict() for player in roster.players]
-        df = pd.DataFrame(players_data)
-        df['team_id'] = team_id  # Add team_id column
-        # Ensure all columns exist with correct order
-        columns = [
-            'team_id',
-            'player_name',
-            'jersey_number',
-            'active',
-            'defensive_position_one',
-            'defensive_position_two',
-            'defensive_position_three',
-            'defensive_position_allocation_one',
-            'defensive_position_allocation_two',
-            'defensive_position_allocation_three'
-        ]
-        # Reorder columns and fill missing values with None
-        df = df.reindex(columns=columns)
-        # Convert DataFrame to Parquet
-        parquet_buffer = BytesIO()
-        df.to_parquet(parquet_buffer)
-        parquet_buffer.seek(0)
-        # Upload roster file to team folder
-        blob_name = f"teams/team_{team_id}/roster.parquet"
-        blob_client = container_client.get_blob_client(blob_name)
-        blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
-        return {
-            "message": f"Successfully created roster for team_{team_id}",
-            "team_id": team_id,
-            "player_count": len(roster.players)
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error creating roster: {str(e)}"
-        )    
 @app.get("/read_metadata/{team_id}")
 async def read_metadata(team_id: str):
     try:
@@ -213,29 +195,97 @@ async def read_metadata_duckdb():
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
     try:
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        blob_name = f"teams/team_{team_id}/roster.parquet"
-        blob_client = container_client.get_blob_client(blob_name)
-        blob_data  = blob_client.download_blob().readall()
-        parquet_file = BytesIO(blob_data)
-        df = pd.read_parquet(parquet_file)
+        con = duckdb.connect()
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        con.execute("SET azure_transport_option_type = 'curl';")
+        con.execute(f"""
+            SET azure_storage_connection_string='{connection_string}';
+        """)
+        query = f"""
+            SELECT *
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
+        """
+        result = con.execute(query).fetchdf()
+        if result.empty:
+            return {
+                "team_id": team_id,
+                "message": "No roster found",
+                "roster": []
+            }
         float_columns = [
             'defensive_position_allocation_one',
             'defensive_position_allocation_two',
             'defensive_position_allocation_three'
         ]
         for col in float_columns:
-            if col in df.columns:
-                df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else None)
-        
-        roster_dict = df.to_dict(orient='records')
+            if col in result.columns:
+                result[col] = result[col].apply(lambda x: str(x) if pd.notnull(x) else None)
         return {
             "team_id": team_id,
-            "roster": roster_dict  # Use roster_dict instead of df.to_dict()
+            "roster": result.to_dict(orient='records')
         }
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Team {team_id}/roster.parquet not found or error reading metadata: {str(e)}"
+            detail=f"Error reading team {team_id} roster: {str(e)}"
+        )
+@app.post("/teams/{team_id}/add_player")  # Added @ decorator
+async def add_or_edit_player(team_id: str, player: PlayerData):
+    try:
+        # Convert player to dict and add IDs using model_dump() instead of dict()
+        player_dict = player.model_dump()
+        player_dict['team_id'] = team_id
+        player_dict['player_id'] = f"{team_id}_{player.jersey_number}"
+        player_dict['last_modified'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Get blob service client
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # Create team folder if it doesn't exist
+        team_folder = f"teams/team_{team_id}/"
+        folder_marker = f"{team_folder}.folder"
+        folder_client = container_client.get_blob_client(folder_marker)
+        try:
+            folder_client.get_blob_properties()
+        except Exception:
+            # Folder doesn't exist, create it
+            folder_client.upload_blob(b"", overwrite=True)
+        
+        # Now handle the player file
+        blob_name = f"{team_folder}{player.jersey_number}.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
+        
+        action_message = "added"
+        try:
+            existing_blob = blob_client.download_blob().readall()
+            existing_df = pd.read_parquet(BytesIO(existing_blob))
+            action_message = "updated"
+            # Preserve created_on from existing data
+            player_dict['created_on'] = existing_df['created_on'].iloc[0]
+        except Exception:
+            player_dict['created_on'] = player_dict['last_modified']
+        
+        # Convert to DataFrame
+        df = pd.DataFrame([player_dict])
+        
+        # Convert DataFrame to Parquet
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload the parquet file
+        blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": f"Player {action_message} successfully",
+            "team_id": team_id,
+            "player": player_dict,
+            "action": action_message
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error adding/updating player in team {team_id}: {str(e)}"
         )
