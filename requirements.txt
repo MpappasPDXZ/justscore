@@ -6,4 +6,4 @@ pandas
 pyarrow
 typing
 duckdb
-dotenv
+python-dotenv

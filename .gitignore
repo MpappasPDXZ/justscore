@@ -5,6 +5,8 @@
 venv/
 env/
 ENV/
+# Virtual environment
+myenv/
 
 # Python cache files
 __pycache__/
@@ -23,6 +25,7 @@ build/
 # Local development settings
 *.log
 .DS_Store
+test.py
 
 # Virtual environment
 venv/
