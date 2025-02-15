@@ -23,3 +23,8 @@ build/
 # Local development settings
 *.log
 .DS_Store
+
+# Virtual environment
+venv/
+virtual_env/
+virtual_env/justscoreenv/
