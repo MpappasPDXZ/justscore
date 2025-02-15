@@ -7,6 +7,9 @@ from io import BytesIO
 import os
 from typing import Optional
 import duckdb
+from dotenv import load_dotenv
+load_dotenv()
+
 app = FastAPI()
 
 @app.get("/")
