@@ -170,6 +170,17 @@ async def read_metadata(team_id: str):
             status_code=404, 
             detail=f"Team {team_id} not found or error reading metadata: {str(e)}"
         )       
+# Add an OPTIONS endpoint handler
+@app.options("/read_metadata_duckdb")
+async def options_metadata():
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "https://justscorereact.delightfulsky-cfea119e.centralus.azurecontainerapps.io",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
     
 @app.get("/read_metadata_duckdb")
 async def read_metadata_duckdb():
