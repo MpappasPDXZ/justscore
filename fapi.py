@@ -363,11 +363,12 @@ async def get_team_roster(team_id: str):
             status_code=500,
             detail=f"Error reading team {team_id} roster: {str(e)}"
         )
-@app.get("/test/team/{team_id}/roster")
-async def test_team_roster(team_id: str):
+
+@app.get("/test/roster")
+async def test_hardcoded_roster():
     try:
-        print(f"Starting test roster request for team {team_id}")  # Console log
-        logger.info(f"Starting test roster request for team {team_id}")  # File log
+        print("Starting test roster request for hardcoded team 1")  # Console log
+        logger.info("Starting test roster request for hardcoded team 1")  # File log
         
         con = duckdb.connect()
         print("DuckDB connected")
@@ -387,16 +388,10 @@ async def test_team_roster(team_id: str):
         print("Storage connection set")
         logger.info("Storage connection set")
         
-        if team_id == "1":
-            query = f"""
-                SELECT *
-                FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_1/[0-9]*.parquet', union_by_name=True)
-            """
-        else:
-            query = f"""
-                SELECT *
-                FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/roster.parquet')
-            """
+        query = """
+            SELECT *
+            FROM read_parquet('azure://justscorecontainer/teams/team_1/[0-9]*.parquet', union_by_name=True)
+        """
             
         print(f"Query to execute: {query}")
         logger.info(f"Query to execute: {query}")
@@ -407,7 +402,7 @@ async def test_team_roster(team_id: str):
         
         if result.empty:
             return {
-                "team_id": team_id,
+                "team_id": "1",
                 "message": "No roster found",
                 "roster": []
             }
@@ -444,12 +439,12 @@ async def test_team_roster(team_id: str):
             result['jersey_number'] = result['jersey_number'].astype(str)
         
         return {
-            "team_id": team_id,
+            "team_id": "1",
             "roster": result.to_dict(orient='records')
         }
             
     except Exception as e:
-        error_msg = f"Error in test_team_roster: {str(e)}"
+        error_msg = f"Error in test_hardcoded_roster: {str(e)}"
         print(error_msg)  # Console log
         logger.error(error_msg)  # File log
         print(f"Error type: {type(e)}")
@@ -460,5 +455,10 @@ async def test_team_roster(team_id: str):
         logger.error(f"Traceback: {tb}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error reading team {team_id} roster: {str(e)}"
+            detail=f"Error reading hardcoded team 1 roster: {str(e)}"
         )
+@app.get("/hello")
+async def hello():
+    print("Hello endpoint called!")
+    logger.info("Hello endpoint called!")
+    return {"message": "Hello World!"}
