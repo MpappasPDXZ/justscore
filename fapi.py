@@ -21,8 +21,8 @@ app.add_middleware(
         "http://localhost:3000",  # Local development
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
 )
 @app.get("/")
 def read_root():
