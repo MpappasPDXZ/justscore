@@ -10,6 +10,10 @@ from typing import Optional
 import duckdb
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = FastAPI()
@@ -214,75 +218,10 @@ async def read_metadata_duckdb():
             detail=f"Error reading metadata: {str(e)}"
         )
     
-@app.get("/teams/{team_id}/roster")
-async def get_team_roster(team_id: str):
-    try:
-        con = duckdb.connect()
-        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        con.execute("SET azure_transport_option_type = 'curl';")
-        con.execute(f"""
-            SET azure_storage_connection_string='{connection_string}';
-        """)
-        
-        query = f"""
-            SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet', union_by_name=True)
-        """
-        
-        result = con.execute(query).fetchdf()
-        
-        if result.empty:
-            return {
-                "team_id": team_id,
-                "message": "No roster found",
-                "roster": []
-            }
-        
-        # Convert float allocations to string format
-        allocation_columns = [
-            'defensive_position_allocation_one',
-            'defensive_position_allocation_two',
-            'defensive_position_allocation_three',
-            'defensive_position_allocation_four'  # Added new allocation
-        ]
-        
-        for col in allocation_columns:
-            if col in result.columns:
-                result[col] = result[col].apply(
-                    lambda x: f"{float(x):.2f}" if pd.notnull(x) else None
-                )
-        
-        # Ensure position columns are strings or None
-        position_columns = [
-            'defensive_position_one',
-            'defensive_position_two',
-            'defensive_position_three',
-            'defensive_position_four'  # Added new position
-        ]
-        
-        for col in position_columns:
-            if col in result.columns:
-                result[col] = result[col].astype(str).where(pd.notnull(result[col]), None)
-        
-        # Convert team_id to string
-        if 'team_id' in result.columns:
-            result['team_id'] = result['team_id'].astype(str)
-        
-        # Convert jersey_number to string if needed
-        if 'jersey_number' in result.columns:
-            result['jersey_number'] = result['jersey_number'].astype(str)
-        
-        return {
-            "team_id": team_id,
-            "roster": result.to_dict(orient='records')
-        }
-            
-    except Exception as e:
-        print(f"Error details: {str(e)}")  # Debug logging
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error reading team {team_id} roster: {str(e)}"
-        )
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 @app.delete("/teams/{team_id}/player/{jersey_number}")
 async def delete_player(team_id: str, jersey_number: str):
     try:
