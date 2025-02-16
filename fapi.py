@@ -229,7 +229,7 @@ async def get_team_roster(team_id: str):
             status_code=500,
             detail=f"Error reading team {team_id} roster: {str(e)}"
         )
-@app.post("/teams/{team_id}/add_player")  # Added @ decorator
+@app.post("/teams/{team_id}/player")  # Added @ decorator
 async def add_or_edit_player(team_id: str, player: PlayerData):
     try:
         # Convert player to dict and add IDs using model_dump() instead of dict()
