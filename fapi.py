@@ -300,27 +300,17 @@ async def add_or_edit_player(team_id: str, player: PlayerData):
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
     try:
-        logger.info(f"Starting roster request for team {team_id}")
-        logger.info(f"CONTAINER_NAME: {CONTAINER_NAME}")
-        logger.info(f"ACCOUNT_NAME exists: {bool(ACCOUNT_NAME)}")
-
         con = duckdb.connect()
-        logger.info("DuckDB connected")
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        logger.info("Connection string created")
         con.execute("SET azure_transport_option_type = 'curl';")
-        logger.info("Transport type set")
         con.execute(f"""
             SET azure_storage_connection_string='{connection_string}';
         """)
-        logger.info("Storage connection set")
         query = f"""
             SELECT *
             FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
         """
-        logger.info("Executing query...")
         result = con.execute(query).fetchdf()
-        logger.info(f"Query complete. Found {len(result)} rows")  
         if result.empty:
             return {
                 "team_id": team_id,
@@ -369,6 +359,105 @@ async def get_team_roster(team_id: str):
         logger.error(f"Error type: {type(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reading team {team_id} roster: {str(e)}"
+        )
+@app.get("/test/team/{team_id}/roster")
+async def test_team_roster(team_id: str):
+    try:
+        print(f"Starting test roster request for team {team_id}")  # Console log
+        logger.info(f"Starting test roster request for team {team_id}")  # File log
+        
+        con = duckdb.connect()
+        print("DuckDB connected")
+        logger.info("DuckDB connected")
+        
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        print("Connection string created")
+        logger.info("Connection string created")
+        
+        con.execute("SET azure_transport_option_type = 'curl';")
+        print("Transport type set")
+        logger.info("Transport type set")
+        
+        con.execute(f"""
+            SET azure_storage_connection_string='{connection_string}';
+        """)
+        print("Storage connection set")
+        logger.info("Storage connection set")
+        
+        if team_id == "1":
+            query = f"""
+                SELECT *
+                FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_1/[0-9]*.parquet', union_by_name=True)
+            """
+        else:
+            query = f"""
+                SELECT *
+                FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/roster.parquet')
+            """
+            
+        print(f"Query to execute: {query}")
+        logger.info(f"Query to execute: {query}")
+        
+        result = con.execute(query).fetchdf()
+        print(f"Query executed successfully. Found {len(result)} rows")
+        logger.info(f"Query executed successfully. Found {len(result)} rows")
+        
+        if result.empty:
+            return {
+                "team_id": team_id,
+                "message": "No roster found",
+                "roster": []
+            }
+        
+        # Process the data
+        allocation_columns = [
+            'defensive_position_allocation_one',
+            'defensive_position_allocation_two',
+            'defensive_position_allocation_three',
+            'defensive_position_allocation_four'
+        ]
+        
+        for col in allocation_columns:
+            if col in result.columns:
+                result[col] = result[col].apply(
+                    lambda x: f"{float(x):.2f}" if pd.notnull(x) else None
+                )
+        
+        position_columns = [
+            'defensive_position_one',
+            'defensive_position_two',
+            'defensive_position_three',
+            'defensive_position_four'
+        ]
+        
+        for col in position_columns:
+            if col in result.columns:
+                result[col] = result[col].astype(str).where(pd.notnull(result[col]), None)
+        
+        if 'team_id' in result.columns:
+            result['team_id'] = result['team_id'].astype(str)
+        
+        if 'jersey_number' in result.columns:
+            result['jersey_number'] = result['jersey_number'].astype(str)
+        
+        return {
+            "team_id": team_id,
+            "roster": result.to_dict(orient='records')
+        }
+            
+    except Exception as e:
+        error_msg = f"Error in test_team_roster: {str(e)}"
+        print(error_msg)  # Console log
+        logger.error(error_msg)  # File log
+        print(f"Error type: {type(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        tb = traceback.format_exc()
+        print(f"Traceback: {tb}")
+        logger.error(f"Traceback: {tb}")
         raise HTTPException(
             status_code=500,
             detail=f"Error reading team {team_id} roster: {str(e)}"
