@@ -32,23 +32,32 @@ class TeamMetadata(BaseModel):
     session: str
     created_on: str  # format: 'mm-dd-yyyy'
 # Define valid defensive positions
-# Define valid defensive positions
 DefensivePosition = Literal[
-    'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'
+    'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH','DP', 'FL'
 ]
 
 class PlayerData(BaseModel):
     player_name: str
     jersey_number: str
-    active: str = "Y"  # Default to "Y"
-    defensive_position_one: DefensivePosition
-    defensive_position_two: Optional[DefensivePosition] = None
-    defensive_position_three: Optional[DefensivePosition] = None
+    active: str  # "Active" or "Inactive"
+    defensive_position_one: str
+    defensive_position_two: Optional[str] = None
+    defensive_position_three: Optional[str] = None
+    defensive_position_four: Optional[str] = None  # New position
     defensive_position_allocation_one: str
     defensive_position_allocation_two: Optional[str] = None
     defensive_position_allocation_three: Optional[str] = None
+    defensive_position_allocation_four: Optional[str] = None  # New allocation
 
-    @field_validator('defensive_position_allocation_one', 'defensive_position_allocation_two', 'defensive_position_allocation_three')
+    @field_validator('active')
+    @classmethod
+    def validate_active(cls, v):
+        if v not in ["Active", "Inactive"]:
+            raise ValueError('active must be either "Active" or "Inactive"')
+        return v
+
+    @field_validator('defensive_position_allocation_one', 'defensive_position_allocation_two', 
+                    'defensive_position_allocation_three', 'defensive_position_allocation_four')
     @classmethod
     def validate_allocations(cls, v):
         if v is not None:
@@ -56,9 +65,11 @@ class PlayerData(BaseModel):
                 float_val = float(v)
                 if float_val < 0 or float_val > 1:
                     raise ValueError('Allocation must be between 0 and 1')
+                return f"{float_val:.2f}"
             except ValueError:
                 raise ValueError('Allocation must be a valid number between 0 and 1')
         return v
+
 class TeamRoster(BaseModel):
     players: list[PlayerData]
 
@@ -201,59 +212,108 @@ async def get_team_roster(team_id: str):
         con.execute(f"""
             SET azure_storage_connection_string='{connection_string}';
         """)
+        
         query = f"""
             SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet', union_by_name=True)
         """
+        
         result = con.execute(query).fetchdf()
+        
         if result.empty:
             return {
                 "team_id": team_id,
                 "message": "No roster found",
                 "roster": []
             }
-        float_columns = [
+        
+        # Convert float allocations to string format
+        allocation_columns = [
             'defensive_position_allocation_one',
             'defensive_position_allocation_two',
-            'defensive_position_allocation_three'
+            'defensive_position_allocation_three',
+            'defensive_position_allocation_four'  # Added new allocation
         ]
-        for col in float_columns:
+        
+        for col in allocation_columns:
             if col in result.columns:
-                result[col] = result[col].apply(lambda x: str(x) if pd.notnull(x) else None)
+                result[col] = result[col].apply(
+                    lambda x: f"{float(x):.2f}" if pd.notnull(x) else None
+                )
+        
+        # Ensure position columns are strings or None
+        position_columns = [
+            'defensive_position_one',
+            'defensive_position_two',
+            'defensive_position_three',
+            'defensive_position_four'  # Added new position
+        ]
+        
+        for col in position_columns:
+            if col in result.columns:
+                result[col] = result[col].astype(str).where(pd.notnull(result[col]), None)
+        
+        # Convert team_id to string
+        if 'team_id' in result.columns:
+            result['team_id'] = result['team_id'].astype(str)
+        
+        # Convert jersey_number to string if needed
+        if 'jersey_number' in result.columns:
+            result['jersey_number'] = result['jersey_number'].astype(str)
+        
         return {
             "team_id": team_id,
             "roster": result.to_dict(orient='records')
         }
+            
     except Exception as e:
+        print(f"Error details: {str(e)}")  # Debug logging
         raise HTTPException(
             status_code=500,
             detail=f"Error reading team {team_id} roster: {str(e)}"
         )
-@app.post("/teams/{team_id}/player")  # Added @ decorator
+@app.delete("/teams/{team_id}/player/{jersey_number}")
+async def delete_player(team_id: str, jersey_number: str):
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        blob_name = f"teams/team_{team_id}/{jersey_number}.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
+        try:
+            blob_client.get_blob_properties()
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Player with jersey number {jersey_number} not found in team {team_id}"
+            )
+        blob_client.delete_blob()
+        
+        return {
+            "message": f"Successfully deleted player with jersey number {jersey_number} from team {team_id}",
+            "team_id": team_id,
+            "jersey_number": jersey_number
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting player from team {team_id}: {str(e)}"
+        )
+@app.post("/teams/{team_id}/player")
 async def add_or_edit_player(team_id: str, player: PlayerData):
     try:
-        # Convert player to dict and add IDs using model_dump() instead of dict()
+        # Convert player to dict and add IDs
         player_dict = player.model_dump()
         player_dict['team_id'] = team_id
         player_dict['player_id'] = f"{team_id}_{player.jersey_number}"
         player_dict['last_modified'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Get blob service client
+        # Check if player already exists
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        
-        # Create team folder if it doesn't exist
-        team_folder = f"teams/team_{team_id}/"
-        folder_marker = f"{team_folder}.folder"
-        folder_client = container_client.get_blob_client(folder_marker)
-        try:
-            folder_client.get_blob_properties()
-        except Exception:
-            # Folder doesn't exist, create it
-            folder_client.upload_blob(b"", overwrite=True)
-        
-        # Now handle the player file
-        blob_name = f"{team_folder}{player.jersey_number}.parquet"
+        blob_name = f"teams/team_{team_id}/{player.jersey_number}.parquet"
         blob_client = container_client.get_blob_client(blob_name)
         
         action_message = "added"

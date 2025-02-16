@@ -26,7 +26,7 @@ build/
 *.log
 .DS_Store
 test.py
-
+update_players.py
 # Virtual environment
 venv/
 virtual_env/
