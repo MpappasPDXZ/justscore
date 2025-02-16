@@ -217,8 +217,6 @@ async def read_metadata_duckdb():
             status_code=500,
             detail=f"Error reading metadata: {str(e)}"
         )
-    
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -298,4 +296,70 @@ async def add_or_edit_player(team_id: str, player: PlayerData):
         raise HTTPException(
             status_code=500,
             detail=f"Error adding/updating player in team {team_id}: {str(e)}"
+        )
+@app.get("/teams/{team_id}/roster")
+async def get_team_roster(team_id: str):
+    try:
+        con = duckdb.connect()
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        con.execute("SET azure_transport_option_type = 'curl';")
+        con.execute(f"""
+            SET azure_storage_connection_string='{connection_string}';
+        """)
+        
+        query = f"""
+            SELECT *
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
+        """
+        
+        result = con.execute(query).fetchdf()
+        
+        if result.empty:
+            return {
+                "team_id": team_id,
+                "message": "No roster found",
+                "roster": []
+            }
+        
+        # Process allocations and positions
+        allocation_columns = [
+            'defensive_position_allocation_one',
+            'defensive_position_allocation_two',
+            'defensive_position_allocation_three',
+            'defensive_position_allocation_four'
+        ]
+        
+        for col in allocation_columns:
+            if col in result.columns:
+                result[col] = result[col].apply(
+                    lambda x: f"{float(x):.2f}" if pd.notnull(x) else None
+                )
+        
+        position_columns = [
+            'defensive_position_one',
+            'defensive_position_two',
+            'defensive_position_three',
+            'defensive_position_four'
+        ]
+        
+        for col in position_columns:
+            if col in result.columns:
+                result[col] = result[col].astype(str).where(pd.notnull(result[col]), None)
+        
+        if 'team_id' in result.columns:
+            result['team_id'] = result['team_id'].astype(str)
+        
+        if 'jersey_number' in result.columns:
+            result['jersey_number'] = result['jersey_number'].astype(str)
+        
+        return {
+            "team_id": team_id,
+            "roster": result.to_dict(orient='records')
+        }
+            
+    except Exception as e:
+        print(f"Error details: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reading team {team_id} roster: {str(e)}"
         )
