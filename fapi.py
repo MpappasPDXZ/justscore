@@ -16,10 +16,13 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=[
+        "https://justscorereact.delightfulsky-cfea119e.centralus.azurecontainerapps.io",  # React app URL
+        "http://localhost:3000",  # Local development
+    ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 @app.get("/")
 def read_root():
