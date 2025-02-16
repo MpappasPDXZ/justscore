@@ -300,20 +300,27 @@ async def add_or_edit_player(team_id: str, player: PlayerData):
 @app.get("/teams/{team_id}/roster")
 async def get_team_roster(team_id: str):
     try:
+        logger.info(f"Starting roster request for team {team_id}")
+        logger.info(f"CONTAINER_NAME: {CONTAINER_NAME}")
+        logger.info(f"ACCOUNT_NAME exists: {bool(ACCOUNT_NAME)}")
+
         con = duckdb.connect()
+        logger.info("DuckDB connected")
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        logger.info("Connection string created")
         con.execute("SET azure_transport_option_type = 'curl';")
+        logger.info("Transport type set")
         con.execute(f"""
             SET azure_storage_connection_string='{connection_string}';
         """)
-        
+        logger.info("Storage connection set")
         query = f"""
             SELECT *
             FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
         """
-        
+        logger.info("Executing query...")
         result = con.execute(query).fetchdf()
-        
+        logger.info(f"Query complete. Found {len(result)} rows")  
         if result.empty:
             return {
                 "team_id": team_id,
@@ -358,7 +365,10 @@ async def get_team_roster(team_id: str):
         }
             
     except Exception as e:
-        print(f"Error details: {str(e)}")
+        logger.error(f"Error in get_team_roster: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail=f"Error reading team {team_id} roster: {str(e)}"
