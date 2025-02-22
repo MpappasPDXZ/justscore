@@ -22,4 +22,4 @@ ENV PORT=8001
 EXPOSE 8001
 
 # Command to run the application
-CMD ["uvicorn", "fapi:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "fapi:app", "--host", "0.0.0.0", "--port", "8000"]

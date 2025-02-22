@@ -1,12 +1,11 @@
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, field_validator
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 import os
-from typing import Optional
 import duckdb
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,10 +43,10 @@ class PlayerData(BaseModel):
     player_name: str
     jersey_number: str
     active: str  # "Active" or "Inactive"
-    defensive_position_one: str
-    defensive_position_two: Optional[str] = None
-    defensive_position_three: Optional[str] = None
-    defensive_position_four: Optional[str] = None  # New position
+    defensive_position_one: DefensivePosition
+    defensive_position_two: Optional[DefensivePosition] = None
+    defensive_position_three: Optional[DefensivePosition] = None
+    defensive_position_four: Optional[DefensivePosition] = None  # New position
     defensive_position_allocation_one: str
     defensive_position_allocation_two: Optional[str] = None
     defensive_position_allocation_three: Optional[str] = None
@@ -77,6 +76,12 @@ class PlayerData(BaseModel):
 class TeamRoster(BaseModel):
     players: list[PlayerData]
 
+class PlayerRank(BaseModel):
+    jersey_number: str
+    player_rank: int
+class DepthChartData(BaseModel):
+    team_id: str
+    depth_chart: Dict[str, List[PlayerRank]]
 # Get Azure credentials from environment variables
 ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
 ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
@@ -457,8 +462,69 @@ async def test_hardcoded_roster():
             status_code=500,
             detail=f"Error reading hardcoded team 1 roster: {str(e)}"
         )
+
+
+@app.post("/teams/{team_id}/depth_chart_post")
+async def save_depth_chart(team_id: str, depth_chart: DepthChartData):
+    try:
+        print(f"Saving depth chart for team {team_id}")
+        logger.info(f"Saving depth chart for team {team_id}")
+        
+        # Verify team_id matches
+        if team_id != depth_chart.team_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Team ID in path does not match team ID in data"
+            )
+        
+        # Convert to DataFrame format (flattening the nested structure)
+        rows = []
+        for position, players in depth_chart.depth_chart.items():
+            for player in players:
+                rows.append({
+                    'team_id': team_id,
+                    'position': position,
+                    'jersey_number': player.jersey_number,
+                    'player_rank': player.player_rank
+                })
+        
+        df = pd.DataFrame(rows)
+        
+        # Create blob client
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client("justscorecontainer")
+        
+        # Save depth chart with exact path structure
+        blob_name = f"teams/team_{team_id}/depth_chart/depth_chart.parquet"
+        blob_client = container_client.get_blob_client(blob_name)
+        
+        # Convert DataFrame to parquet and upload
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload to Azure Blob Storage
+        blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": "Depth chart saved successfully",
+            "team_id": team_id,
+            "path": blob_name,
+            "positions_saved": list(depth_chart.depth_chart.keys()),
+            "total_entries": len(rows)
+        }
+            
+    except Exception as e:
+        error_msg = f"Error saving depth chart: {str(e)}"
+        print(error_msg)
+        logger.error(error_msg)
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
 @app.get("/hello")
 async def hello():
-    print("Hello endpoint called!")
-    logger.info("Hello endpoint called!")
-    return {"message": "Hello World!"}
+    print("Hello endpoint called!  Version 2")
+    return {"message": "Hello World!  Version 2"}
