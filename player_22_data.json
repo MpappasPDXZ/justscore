@@ -1,0 +1,17 @@
+{
+    "player_name": "Jules",
+    "jersey_number": "22",
+    "active": "Active",
+    "defensive_position_one": "P",
+    "defensive_position_two": "C",
+    "defensive_position_three": null,
+    "defensive_position_four": null,
+    "defensive_position_allocation_one": "0.50",
+    "defensive_position_allocation_two": "0.50",
+    "defensive_position_allocation_three": null,
+    "defensive_position_allocation_four": null,
+    "team_id": "3",
+    "player_id": "3_22",
+    "last_modified": "2025-02-22 14:49:14",
+    "created_on": "2025-02-22 14:49:14"
+}

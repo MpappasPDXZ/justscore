@@ -139,25 +139,36 @@ async def create_team(team_data: TeamMetadata):
         parquet_buffer = BytesIO()
         df.to_parquet(parquet_buffer)
         parquet_buffer.seek(0)
-        # Upload to Azure Blob Storage
+        # Get blob service client
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        # Create team folder (empty blob as folder marker)
+        # Check if team folder exists
         folder_marker = f"{team_folder}/.folder"
         folder_client = container_client.get_blob_client(folder_marker)
-        folder_client.upload_blob(b"", overwrite=True)
+        folder_exists = False
+        try:
+            folder_client.get_blob_properties()
+            folder_exists = True
+        except Exception:
+            # Folder doesn't exist, create it
+            folder_client.upload_blob(b"", overwrite=True)
+            logger.info(f"Created new team folder: {team_folder}")
+        
         # Upload metadata file with team number as name
         metadata_blob_name = f"metadata/{team_num}.parquet"
         metadata_client = container_client.get_blob_client(metadata_blob_name)
         metadata_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
         return {
-            "message": f"Successfully created team folder and metadata",
+            "message": "Successfully updated team metadata" if folder_exists else "Successfully created team folder and metadata",
             "team_id": str(team_num),
             "team_folder": team_folder,
             "metadata_file": metadata_blob_name,
-            "team_data": data_dict
+            "team_data": data_dict,
+            "folder_status": "existing" if folder_exists else "created"
         }
     except Exception as e:
+        logger.error(f"Error in create_team: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/read_metadata/{team_id}")
@@ -225,6 +236,57 @@ async def read_metadata_duckdb():
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+@app.put("/teams/{team_id}/metadata")
+async def update_team_metadata(team_id: str, team_data: TeamMetadata):
+    try:
+        # Verify the team exists first
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        metadata_blob_name = f"metadata/{team_id}.parquet"
+        metadata_client = container_client.get_blob_client(metadata_blob_name)
+        
+        try:
+            # Check if metadata file exists
+            metadata_client.get_blob_properties()
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team {team_id} not found: {str(e)}"
+            )
+        
+        # Add team_id to the data
+        data_dict = team_data.dict()
+        data_dict['team_id'] = team_id
+        
+        # Convert to DataFrame
+        df = pd.DataFrame([data_dict])
+        
+        # Convert DataFrame to Parquet
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload updated metadata
+        metadata_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": f"Successfully updated team {team_id} metadata",
+            "team_id": team_id,
+            "metadata_file": metadata_blob_name,
+            "team_data": data_dict
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating team metadata: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating team {team_id} metadata: {str(e)}"
+        )
 @app.delete("/teams/{team_id}/player/{jersey_number}")
 async def delete_player(team_id: str, jersey_number: str):
     try:
@@ -308,14 +370,15 @@ async def get_team_roster(team_id: str):
         con = duckdb.connect()
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         con.execute("SET azure_transport_option_type = 'curl';")
-        con.execute(f"""
-            SET azure_storage_connection_string='{connection_string}';
-        """)
+        con.execute(f"SET azure_storage_connection_string='{connection_string}';")
+        
+        # Add union_by_name=True to handle schema differences
         query = f"""
             SELECT *
-            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet', union_by_name=True)
         """
         result = con.execute(query).fetchdf()
+        
         if result.empty:
             return {
                 "team_id": team_id,
@@ -369,99 +432,6 @@ async def get_team_roster(team_id: str):
             detail=f"Error reading team {team_id} roster: {str(e)}"
         )
 
-@app.get("/test/roster")
-async def test_hardcoded_roster():
-    try:
-        print("Starting test roster request for hardcoded team 1")  # Console log
-        logger.info("Starting test roster request for hardcoded team 1")  # File log
-        
-        con = duckdb.connect()
-        print("DuckDB connected")
-        logger.info("DuckDB connected")
-        
-        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        print("Connection string created")
-        logger.info("Connection string created")
-        
-        con.execute("SET azure_transport_option_type = 'curl';")
-        print("Transport type set")
-        logger.info("Transport type set")
-        
-        con.execute(f"""
-            SET azure_storage_connection_string='{connection_string}';
-        """)
-        print("Storage connection set")
-        logger.info("Storage connection set")
-        
-        query = """
-            SELECT *
-            FROM read_parquet('azure://justscorecontainer/teams/team_1/[0-9]*.parquet', union_by_name=True)
-        """
-            
-        print(f"Query to execute: {query}")
-        logger.info(f"Query to execute: {query}")
-        
-        result = con.execute(query).fetchdf()
-        print(f"Query executed successfully. Found {len(result)} rows")
-        logger.info(f"Query executed successfully. Found {len(result)} rows")
-        
-        if result.empty:
-            return {
-                "team_id": "1",
-                "message": "No roster found",
-                "roster": []
-            }
-        
-        # Process the data
-        allocation_columns = [
-            'defensive_position_allocation_one',
-            'defensive_position_allocation_two',
-            'defensive_position_allocation_three',
-            'defensive_position_allocation_four'
-        ]
-        
-        for col in allocation_columns:
-            if col in result.columns:
-                result[col] = result[col].apply(
-                    lambda x: f"{float(x):.2f}" if pd.notnull(x) else None
-                )
-        
-        position_columns = [
-            'defensive_position_one',
-            'defensive_position_two',
-            'defensive_position_three',
-            'defensive_position_four'
-        ]
-        
-        for col in position_columns:
-            if col in result.columns:
-                result[col] = result[col].astype(str).where(pd.notnull(result[col]), None)
-        
-        if 'team_id' in result.columns:
-            result['team_id'] = result['team_id'].astype(str)
-        
-        if 'jersey_number' in result.columns:
-            result['jersey_number'] = result['jersey_number'].astype(str)
-        
-        return {
-            "team_id": "1",
-            "roster": result.to_dict(orient='records')
-        }
-            
-    except Exception as e:
-        error_msg = f"Error in test_hardcoded_roster: {str(e)}"
-        print(error_msg)  # Console log
-        logger.error(error_msg)  # File log
-        print(f"Error type: {type(e)}")
-        logger.error(f"Error type: {type(e)}")
-        import traceback
-        tb = traceback.format_exc()
-        print(f"Traceback: {tb}")
-        logger.error(f"Traceback: {tb}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error reading hardcoded team 1 roster: {str(e)}"
-        )
 
 
 @app.post("/teams/{team_id}/depth_chart_post")
@@ -489,23 +459,14 @@ async def save_depth_chart(team_id: str, depth_chart: DepthChartData):
                 })
         
         df = pd.DataFrame(rows)
-        
-        # Create blob client
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client("justscorecontainer")
-        
-        # Save depth chart with exact path structure
         blob_name = f"teams/team_{team_id}/depth_chart/depth_chart.parquet"
         blob_client = container_client.get_blob_client(blob_name)
-        
-        # Convert DataFrame to parquet and upload
         parquet_buffer = BytesIO()
         df.to_parquet(parquet_buffer)
         parquet_buffer.seek(0)
-        
-        # Upload to Azure Blob Storage
         blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
-        
         return {
             "message": "Depth chart saved successfully",
             "team_id": team_id,
@@ -523,6 +484,209 @@ async def save_depth_chart(team_id: str, depth_chart: DepthChartData):
         raise HTTPException(
             status_code=500,
             detail=error_msg
+        )
+
+@app.get("/teams/{team_id}/depth_chart_get")
+async def get_depth_chart(team_id: str):
+    try:
+        # Define position order
+        position_order = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
+        
+        # Connect to DuckDB
+        con = duckdb.connect()
+        connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
+        con.execute("SET azure_transport_option_type = 'curl';")
+        con.execute(f"SET azure_storage_connection_string='{connection_string}';")
+
+        # First get roster data to check active status - Added union_by_name=True
+        roster_query = f"""
+            SELECT 
+                jersey_number,
+                player_name,
+                active,
+                defensive_position_one,
+                defensive_position_two,
+                defensive_position_three,
+                defensive_position_four,
+                CAST(defensive_position_allocation_one AS FLOAT) as allocation_one,
+                CAST(defensive_position_allocation_two AS FLOAT) as allocation_two,
+                CAST(defensive_position_allocation_three AS FLOAT) as allocation_three,
+                CAST(defensive_position_allocation_four AS FLOAT) as allocation_four
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet', union_by_name=True)
+            WHERE jersey_number IS NOT NULL
+        """
+        roster_df = con.execute(roster_query).fetchdf()
+        
+        # Filter for active players
+        active_players = roster_df[roster_df['active'] == 'Active']
+        
+        try:
+            # Try to read existing depth chart
+            depth_chart_query = f"""
+                SELECT 
+                    CAST(team_id AS INTEGER) as team_id,
+                    position,
+                    player_rank,
+                    jersey_number
+                FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/depth_chart/depth_chart.parquet')
+            """
+            depth_chart_df = con.execute(depth_chart_query).fetchdf()
+            
+            # Remove inactive players from depth chart
+            depth_chart_df = depth_chart_df[
+                depth_chart_df['jersey_number'].isin(active_players['jersey_number'])
+            ]
+            
+        except Exception as e:
+            logger.info(f"No existing depth chart found for team {team_id}, creating default")
+            # Create default depth chart based on allocations
+            depth_chart_rows = []
+            
+            # Calculate weighted sum for tiebreaking
+            active_players['weighted_sum'] = (
+                active_players['allocation_one'].fillna(0) * 1.1 +
+                active_players['allocation_two'].fillna(0) * 1.05 +
+                active_players['allocation_three'].fillna(0) * 1.03 +
+                active_players['allocation_four'].fillna(0)
+            )
+            
+            # Process each position
+            for pos in position_order:
+                # Get players who can play this position
+                pos_players = []
+                for _, player in active_players.iterrows():
+                    allocation = 0
+                    # Check each position with null handling
+                    if pd.notnull(player['defensive_position_one']) and player['defensive_position_one'] == pos:
+                        allocation += player['allocation_one'] if pd.notnull(player['allocation_one']) else 0
+                    if pd.notnull(player['defensive_position_two']) and player['defensive_position_two'] == pos:
+                        allocation += player['allocation_two'] if pd.notnull(player['allocation_two']) else 0
+                    if pd.notnull(player['defensive_position_three']) and player['defensive_position_three'] == pos:
+                        allocation += player['allocation_three'] if pd.notnull(player['allocation_three']) else 0
+                    if pd.notnull(player['defensive_position_four']) and player['defensive_position_four'] == pos:
+                        allocation += player['allocation_four'] if pd.notnull(player['allocation_four']) else 0
+                    
+                    if allocation > 0:
+                        pos_players.append({
+                            'jersey_number': player['jersey_number'],
+                            'allocation': allocation,
+                            'weighted_sum': player['weighted_sum']
+                        })
+                
+                # Sort players by allocation and weighted sum
+                pos_players.sort(key=lambda x: (-x['allocation'], -x['weighted_sum'], x['jersey_number']))
+                
+                # Add to depth chart
+                for rank, player in enumerate(pos_players, 1):
+                    depth_chart_rows.append({
+                        'team_id': int(team_id),
+                        'position': pos,
+                        'player_rank': rank,
+                        'jersey_number': player['jersey_number']
+                    })
+            
+            depth_chart_df = pd.DataFrame(depth_chart_rows)
+        
+        # Merge with player names
+        result_df = pd.merge(
+            depth_chart_df,
+            active_players[['jersey_number', 'player_name']],
+            on='jersey_number',
+            how='left'
+        )
+        
+        # Create player display name
+        result_df['player_name'] = result_df.apply(
+            lambda x: f"{x['jersey_number']} - {x['player_name']}", axis=1
+        )
+        
+        # Sort by position order and rank
+        result_df['position_order'] = result_df['position'].map({pos: idx for idx, pos in enumerate(position_order)})
+        result_df = result_df.sort_values(['position_order', 'player_rank'])
+        result_df = result_df.drop('position_order', axis=1)
+        
+        # Convert to dictionary format
+        result = result_df.to_dict(orient='records')
+        
+        return {
+            "team_id": int(team_id),
+            "depth_chart": result
+        }
+            
+    except Exception as e:
+        logger.error(f"Error in get_depth_chart: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reading depth chart for team {team_id}: {str(e)}"
+        )
+
+@app.delete("/teams/{team_id}")
+async def delete_team(team_id: str):
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        deleted_files = []
+        errors = []
+
+        # 1. Delete metadata file
+        try:
+            metadata_blob_name = f"metadata/{team_id}.parquet"
+            metadata_blob_client = container_client.get_blob_client(metadata_blob_name)
+            metadata_blob_client.delete_blob()
+            deleted_files.append(metadata_blob_name)
+        except Exception as e:
+            errors.append(f"Error deleting metadata: {str(e)}")
+
+        # 2. Delete team folder and all its contents
+        try:
+            # List all blobs in the team folder
+            team_folder_prefix = f"teams/team_{team_id}/"
+            blobs_list = container_client.list_blobs(name_starts_with=team_folder_prefix)
+            
+            # Delete each blob in the folder
+            for blob in blobs_list:
+                try:
+                    blob_client = container_client.get_blob_client(blob.name)
+                    blob_client.delete_blob()
+                    deleted_files.append(blob.name)
+                except Exception as e:
+                    errors.append(f"Error deleting {blob.name}: {str(e)}")
+        except Exception as e:
+            errors.append(f"Error accessing team folder: {str(e)}")
+
+        # Check if any files were deleted
+        if not deleted_files:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team {team_id} not found or already deleted"
+            )
+
+        # Return status with details
+        response = {
+            "message": f"Team {team_id} deleted successfully",
+            "team_id": team_id,
+            "deleted_files": deleted_files,
+        }
+        
+        # Include errors in response if any occurred
+        if errors:
+            response["warnings"] = errors
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting team {team_id}: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting team {team_id}: {str(e)}"
         )
 @app.get("/hello")
 async def hello():

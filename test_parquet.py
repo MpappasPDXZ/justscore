@@ -1,5 +1,6 @@
 from azure.storage.blob import BlobServiceClient
 import pandas as pd
+import duckdb
 from io import BytesIO
 import os
 from dotenv import load_dotenv
@@ -7,48 +8,87 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-def read_depth_chart_parquet():
+def test_depth_chart_get():
     try:
+        # Define position order
+        position_order = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
+        
         # Get Azure credentials from environment variables
         ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT')
         ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
+        CONTAINER_NAME = "justscorecontainer"
+        team_id = "1"
         
-        # Set up the blob service client
+        # Connect to DuckDB
+        con = duckdb.connect()
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        con.execute("SET azure_transport_option_type = 'curl';")
+        con.execute(f"SET azure_storage_connection_string='{connection_string}';")
+
+        print("\nReading depth chart data...")
+        # Read depth chart
+        depth_chart_query = f"""
+            SELECT 
+                CAST(team_id AS INTEGER) as team_id,
+                position,
+                player_rank,
+                jersey_number
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/depth_chart/depth_chart.parquet')
+        """
         
-        # Get container client
-        container_client = blob_service_client.get_container_client("justscorecontainer")
+        print("\nReading player data...")
+        # Read player data
+        player_query = f"""
+            SELECT 
+                jersey_number,
+                player_name
+            FROM read_parquet('azure://{CONTAINER_NAME}/teams/team_{team_id}/*.parquet')
+            WHERE jersey_number IS NOT NULL
+        """
         
-        # Get blob client
-        blob_path = "teams/team_1/depth_chart/depth_chart.parquet"
-        blob_client = container_client.get_blob_client(blob_path)
+        # Execute queries
+        depth_chart_df = con.execute(depth_chart_query).fetchdf()
+        player_df = con.execute(player_query).fetchdf()
         
-        # Download blob data
-        blob_data = blob_client.download_blob().readall()
+        print("\nDepth Chart Data:")
+        print(depth_chart_df)
         
-        # Convert to DataFrame
-        df = pd.read_parquet(BytesIO(blob_data))
+        print("\nPlayer Data:")
+        print(player_df)
         
-        # Print the data
-        print("\nDataFrame contents:")
-        print(df)
+        # Merge dataframes
+        result_df = pd.merge(depth_chart_df, player_df, on='jersey_number', how='left')
         
-        # Print some basic info
-        print("\nDataFrame info:")
-        print(df.info())
+        # Create player_display column
+        result_df['player_name'] = result_df.apply(
+            lambda x: f"{x['jersey_number']} - {x['player_name']}", axis=1
+        )
         
-        # Print unique positions
-        print("\nUnique positions:")
-        print(df['position'].unique())
+        # Sort by custom position order and then by rank
+        result_df['position_order'] = result_df['position'].map({pos: idx for idx, pos in enumerate(position_order)})
+        result_df = result_df.sort_values(['position_order', 'player_rank'])
+        result_df = result_df.drop('position_order', axis=1)  # Remove the ordering column
         
-        return df
+        print("\nFinal Merged Result (in correct position order):")
+        print(result_df)
+        
+        # Print some statistics
+        print("\nStatistics:")
+        print(f"Total positions: {len(result_df['position'].unique())}")
+        print(f"Total players in depth chart: {len(result_df)}")
+        print("\nPlayers by position (in correct order):")
+        position_counts = result_df.groupby('position').size()
+        # Reorder the position counts
+        position_counts = position_counts.reindex(position_order)
+        print(position_counts)
+        
+        return result_df
         
     except Exception as e:
-        print(f"Error reading parquet file: {str(e)}")
+        print(f"Error testing depth chart: {str(e)}")
         raise
 
 if __name__ == "__main__":
-    print("Starting parquet file read test...")
-    df = read_depth_chart_parquet()
+    print("Starting depth chart test for team 1...")
+    df = test_depth_chart_get()
     print("\nTest completed successfully!") 
