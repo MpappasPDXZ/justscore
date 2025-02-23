@@ -751,5 +751,5 @@ async def delete_team(team_id: str):
         )
 @app.get("/hello")
 async def hello():
-    print("Hello endpoint called!  Version 3")
-    return {"message": "Hello World!  Version 3"}
+    print("Hello endpoint called!  Version 4")
+    return {"message": "Hello World!  Version 4"}

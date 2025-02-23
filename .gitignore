@@ -30,3 +30,6 @@ update_players.py
 
 # Virtual environment
 venv/
+
+# Environment variables and secrets
+*.env
