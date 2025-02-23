@@ -497,8 +497,7 @@ async def get_depth_chart(team_id: str):
         connection_string = f"DefaultEndpointsProtocol=https;AccountName={ACCOUNT_NAME};AccountKey={ACCOUNT_KEY};EndpointSuffix=core.windows.net"
         con.execute("SET azure_transport_option_type = 'curl';")
         con.execute(f"SET azure_storage_connection_string='{connection_string}';")
-
-        # First get roster data to check active status - Added union_by_name=True
+        # Get roster data with union_by_name=True
         roster_query = f"""
             SELECT 
                 jersey_number,
@@ -536,6 +535,68 @@ async def get_depth_chart(team_id: str):
             depth_chart_df = depth_chart_df[
                 depth_chart_df['jersey_number'].isin(active_players['jersey_number'])
             ]
+            
+            # Validate existing position assignments
+            valid_assignments = []
+            for _, row in depth_chart_df.iterrows():
+                player = active_players[active_players['jersey_number'] == row['jersey_number']].iloc[0]
+                position = row['position']
+                
+                # Calculate total allocation for this position
+                allocation = 0
+                if pd.notnull(player['defensive_position_one']) and player['defensive_position_one'] == position:
+                    allocation += player['allocation_one'] if pd.notnull(player['allocation_one']) else 0
+                if pd.notnull(player['defensive_position_two']) and player['defensive_position_two'] == position:
+                    allocation += player['allocation_two'] if pd.notnull(player['allocation_two']) else 0
+                if pd.notnull(player['defensive_position_three']) and player['defensive_position_three'] == position:
+                    allocation += player['allocation_three'] if pd.notnull(player['allocation_three']) else 0
+                if pd.notnull(player['defensive_position_four']) and player['defensive_position_four'] == position:
+                    allocation += player['allocation_four'] if pd.notnull(player['allocation_four']) else 0
+                
+                # Only keep assignments where player has allocation
+                if allocation > 0:
+                    valid_assignments.append(row)
+            
+            # Update depth chart with only valid assignments
+            depth_chart_df = pd.DataFrame(valid_assignments)
+            
+            # Check all active players for their positions
+            position_assignments = []
+            for _, player in active_players.iterrows():
+                # Check each position and allocation
+                positions_to_check = [
+                    ('defensive_position_one', 'allocation_one'),
+                    ('defensive_position_two', 'allocation_two'),
+                    ('defensive_position_three', 'allocation_three'),
+                    ('defensive_position_four', 'allocation_four')
+                ]
+                
+                for pos_field, alloc_field in positions_to_check:
+                    if pd.notnull(player[pos_field]) and pd.notnull(player[alloc_field]) and player[alloc_field] > 0:
+                        position = player[pos_field]
+                        # Check if player is already in this position in depth chart
+                        player_in_position = depth_chart_df[
+                            (depth_chart_df['jersey_number'] == player['jersey_number']) & 
+                            (depth_chart_df['position'] == position)
+                        ]
+                        
+                        if player_in_position.empty:
+                            # Player should be in this position but isn't
+                            existing_players = depth_chart_df[depth_chart_df['position'] == position]
+                            max_rank = existing_players['player_rank'].max() if not existing_players.empty else 0
+                            
+                            position_assignments.append({
+                                'team_id': int(team_id),
+                                'position': position,
+                                'player_rank': max_rank + 1,
+                                'jersey_number': player['jersey_number']
+                            })
+            
+            # Add any missing position assignments
+            if position_assignments:
+                logger.info(f"Adding {len(position_assignments)} missing position assignments")
+                new_assignments_df = pd.DataFrame(position_assignments)
+                depth_chart_df = pd.concat([depth_chart_df, new_assignments_df], ignore_index=True)
             
         except Exception as e:
             logger.info(f"No existing depth chart found for team {team_id}, creating default")
