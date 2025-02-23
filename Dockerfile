@@ -16,10 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Set environment variable for the port
-ENV PORT=8001
+ENV PORT=8000
 
 # Expose the port
-EXPOSE 8001
+EXPOSE 8000
 
 # Command to run the application
 CMD ["uvicorn", "fapi:app", "--host", "0.0.0.0", "--port", "8000"]
