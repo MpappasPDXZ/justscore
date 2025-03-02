@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
-COPY . .
+COPY lineup.py teams.py fapi.py games.py utils.py ./
 
 # Set environment variable for the port
 ENV PORT=8000
