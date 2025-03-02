@@ -27,7 +27,8 @@ build/
 .DS_Store
 test.py
 update_players.py
-
+fake_game.py
+fake_game_reader.py
 # Virtual environment
 venv/
 
