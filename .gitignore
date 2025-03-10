@@ -29,6 +29,10 @@ test.py
 update_players.py
 fake_game.py
 fake_game_reader.py
+inning_gen.py
+inning_read.py
+
+
 # Virtual environment
 venv/
 

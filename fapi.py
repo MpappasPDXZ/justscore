@@ -9,6 +9,7 @@ from utils import *
 from teams import router as teams_router
 from games import router as games_router
 from lineup import router as lineup_router
+from scores import router as score_router
 
 app = FastAPI(
     title="FastAPI Team Management API",
@@ -46,6 +47,12 @@ app.include_router(
     lineup_router,
     prefix="/lineup",
     tags=["lineup"]
+)
+
+app.include_router(
+    score_router,
+    prefix="/scores",
+    tags=["scores"]
 )
 
 @app.get("/", tags=["root"])
