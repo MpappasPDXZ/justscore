@@ -39,3 +39,10 @@ def get_duckdb_connection():
     con.execute("SET azure_transport_option_type = 'curl';")
     con.execute(f"SET azure_storage_connection_string='{connection_string}';")
     return con
+
+def blob_exists(blob_client):
+    try:
+        blob_client.get_blob_properties()
+        return True
+    except Exception:
+        return False

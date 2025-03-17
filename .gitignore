@@ -31,6 +31,8 @@ fake_game.py
 fake_game_reader.py
 inning_gen.py
 inning_read.py
+parquet_reader.py
+read_specific_parquet.py
 
 
 # Virtual environment
