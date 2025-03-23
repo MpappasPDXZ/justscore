@@ -14,6 +14,7 @@ env:
   IMAGE_NAME: justscore
   RESOURCE_GROUP: justscore-rg
   APP_SERVICE_NAME: justscoreca
+  CONTAINER_APP: true
 
 jobs:
   promote-to-production:
@@ -41,13 +42,56 @@ jobs:
         echo "Using image tag: ${{ github.event.inputs.image_tag || 'latest' }}"
         echo "IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}" >> $GITHUB_ENV
         
+    - name: Check if App Service exists
+      id: check-app
+      run: |
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          # Check if the Container App exists
+          EXISTS=$(az containerapp show --name ${{ env.APP_SERVICE_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv 2>/dev/null || echo "")
+        else
+          # Check if the App Service exists
+          EXISTS=$(az webapp show --name ${{ env.APP_SERVICE_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv 2>/dev/null || echo "")
+        fi
+        
+        if [ -z "$EXISTS" ]; then
+          echo "App ${{ env.APP_SERVICE_NAME }} does not exist."
+          echo "app_exists=false" >> $GITHUB_OUTPUT
+        else
+          echo "App ${{ env.APP_SERVICE_NAME }} exists."
+          echo "app_exists=true" >> $GITHUB_OUTPUT
+        fi
+        
     - name: Deploy using Azure CLI
+      if: steps.check-app.outputs.app_exists == 'true'
       run: |
         echo "Deploying ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} to ${{ env.APP_SERVICE_NAME }}"
-        az webapp config container set --name ${{ env.APP_SERVICE_NAME }} \
-          --resource-group ${{ env.RESOURCE_GROUP }} \
-          --docker-custom-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
-          --docker-registry-server-url https://${{ env.REGISTRY }}
+        
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          # Deploy to Container App
+          az containerapp update --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+            --registry-server ${{ env.REGISTRY }}
+        else
+          # Deploy to Web App
+          az webapp config container set --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --docker-custom-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+            --docker-registry-server-url https://${{ env.REGISTRY }}
+        fi
+          
+    - name: Skip deployment - App Service not found
+      if: steps.check-app.outputs.app_exists != 'true'
+      run: |
+        echo "Skipping deployment because App ${{ env.APP_SERVICE_NAME }} does not exist."
+        
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          echo "To create the Container App, run:"
+          echo "az containerapp create --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_SERVICE_NAME }} --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+        else
+          echo "To create the App Service, run:"
+          echo "az webapp create --resource-group ${{ env.RESOURCE_GROUP }} --plan YOUR_PLAN_NAME --name ${{ env.APP_SERVICE_NAME }} --deployment-container-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+        fi
         
     - name: Azure logout
       run: |

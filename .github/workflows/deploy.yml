@@ -19,6 +19,7 @@ env:
   IMAGE_NAME: justscore
   RESOURCE_GROUP: justscore-rg
   APP_SERVICE_NAME: justscoreca
+  CONTAINER_APP: true
 
 jobs:
   build-and-deploy:
@@ -73,11 +74,60 @@ jobs:
         tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         platforms: linux/amd64
         
+    - name: Check if App Service exists
+      id: check-app
+      run: |
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          # Check if the Container App exists
+          EXISTS=$(az containerapp show --name ${{ env.APP_SERVICE_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv 2>/dev/null || echo "")
+        else
+          # Check if the App Service exists
+          EXISTS=$(az webapp show --name ${{ env.APP_SERVICE_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv 2>/dev/null || echo "")
+        fi
+        
+        if [ -z "$EXISTS" ]; then
+          echo "App ${{ env.APP_SERVICE_NAME }} does not exist."
+          echo "app_exists=false" >> $GITHUB_OUTPUT
+        else
+          echo "App ${{ env.APP_SERVICE_NAME }} exists."
+          echo "app_exists=true" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Deploy to Azure
+      if: steps.check-app.outputs.app_exists == 'true'
+      run: |
+        echo "Deploying ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} to ${{ env.APP_SERVICE_NAME }}"
+        
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          # Deploy to Container App
+          az containerapp update --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --registry-server ${{ env.REGISTRY }}
+        else
+          # Deploy to Web App using azure/webapps-deploy action
+          echo "Using Web App deployment"
+        fi
+    
     - name: Deploy to Azure App Service
+      if: steps.check-app.outputs.app_exists == 'true' && env.CONTAINER_APP != 'true'
       uses: azure/webapps-deploy@v2
       with:
         app-name: ${{ env.APP_SERVICE_NAME }}
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+    
+    - name: Skip deployment - App Service not found
+      if: steps.check-app.outputs.app_exists != 'true'
+      run: |
+        echo "Skipping deployment because App ${{ env.APP_SERVICE_NAME }} does not exist."
+        
+        if [ "${{ env.CONTAINER_APP }}" == "true" ]; then
+          echo "To create the Container App, run:"
+          echo "az containerapp create --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_SERVICE_NAME }} --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        else
+          echo "To create the App Service, run:"
+          echo "az webapp create --resource-group ${{ env.RESOURCE_GROUP }} --plan YOUR_PLAN_NAME --name ${{ env.APP_SERVICE_NAME }} --deployment-container-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        fi
         
     - name: Azure logout
       run: |
