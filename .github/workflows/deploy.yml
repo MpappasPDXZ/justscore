@@ -48,11 +48,20 @@ jobs:
         exit 1
         
     - name: Log in to Azure Container Registry
+      id: acr-login
+      continue-on-error: true
       uses: azure/docker-login@v1
       with:
         login-server: ${{ env.REGISTRY }}
         username: ${{ secrets.ACR_USERNAME }}
         password: ${{ secrets.ACR_PASSWORD }}
+        
+    - name: Check ACR login status
+      if: steps.acr-login.outcome != 'success'
+      run: |
+        echo "::error::ACR login failed. Please ensure ACR_USERNAME and ACR_PASSWORD secrets are configured."
+        echo "You can get your ACR credentials by running: az acr credential show --name justscoreacr"
+        exit 1
         
     - name: Build and push image
       uses: docker/build-push-action@v4

@@ -41,11 +41,13 @@ jobs:
         echo "Using image tag: ${{ github.event.inputs.image_tag || 'latest' }}"
         echo "IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}" >> $GITHUB_ENV
         
-    - name: Deploy to Azure App Service
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: ${{ env.APP_SERVICE_NAME }}
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+    - name: Deploy using Azure CLI
+      run: |
+        echo "Deploying ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} to ${{ env.APP_SERVICE_NAME }}"
+        az webapp config container set --name ${{ env.APP_SERVICE_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --docker-custom-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+          --docker-registry-server-url https://${{ env.REGISTRY }}
         
     - name: Azure logout
       run: |
