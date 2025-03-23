@@ -48,65 +48,49 @@ async def list_games(team_id: str):
     List all games for a specific team by finding game_[number].parquet files
     """
     try:
-        # Get DuckDB connection
         con = get_duckdb_connection()
-        
-        # List all game files for the team
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        games_prefix = f"games/team_{team_id}/game_"
-        blobs = container_client.list_blobs(name_starts_with=games_prefix)
-        
-        games = []
-        for blob in blobs:
-            if blob.name.endswith('.parquet'):
-                try:
-                    # Extract game number from filename
-                    game_filename = blob.name.split('/')[-1]
-                    game_number = int(game_filename.split('_')[1].split('.')[0])
-                    
-                    # Use DuckDB to read the parquet file with explicit column selection
-                    query = f"""
-                        SELECT 
-                            user_team,
-                            coach,
-                            away_team_name,
-                            event_date,
-                            event_hour,
-                            event_minute,
-                            field_name,
-                            field_location,
-                            field_type,
-                            field_temperature,
-                            game_status,
-                            my_team_ha
-                        FROM read_parquet('azure://{CONTAINER_NAME}/{blob.name}')
-                    """
-                    game_df = con.execute(query).fetchdf()
-                    
-                    # Handle the case where columns might be missing
-                    if game_df.empty:
-                        logger.warning(f"Empty game data for {blob.name}")
-                        continue
-                        
-                    game_data = game_df.to_dict(orient='records')[0]
-                    
-                    # Add game_id to the data
-                    game_data['game_id'] = str(game_number)
-                    
-                    games.append(game_data)
-                except Exception as e:
-                    logger.error(f"Error processing game file {blob.name}: {str(e)}")
-                    continue
-        
-        # Sort games by game_id
-        games.sort(key=lambda x: int(x['game_id']))
-        
-        return {
-            "team_id": team_id,
-            "games_count": len(games),
-            "games": games
-        }
+        game_df = pd.DataFrame()  # Initialize an empty DataFrame
+        try:
+            game_list_blob_name = f"games/team_{team_id}/game_*.parquet"      
+            query = f"""
+                SELECT 
+                *
+                FROM read_parquet('azure://{CONTAINER_NAME}/{game_list_blob_name}')
+            """
+            game_df = con.execute(query).fetchdf()           
+            # Handle the case where columns might be missing
+            if game_df.empty:
+                logger.warning(f"Empty game list for team {team_id}")
+                return {
+                    "team_id": team_id,
+                    "games_count": 0,
+                    "games": []
+                }
+                
+        except Exception as e:
+            error_msg = str(e)
+            if "Failed to open" in error_msg or "No files found" in error_msg:
+                logger.info(f"No games found for team {team_id}")
+                return {
+                    "team_id": team_id,
+                    "games_count": 0,
+                    "games": []
+                }
+            else:
+                logger.error(f"Error processing game file {team_id}: {str(e)}")
+        # Only try to process the DataFrame if it's not empty
+        if not game_df.empty:
+            return {
+                "team_id": team_id,
+                "games_count": len(game_df),
+                "games": game_df.to_dict(orient='records')
+            }
+        else:
+            return {
+                "team_id": team_id,
+                "games_count": 0,
+                "games": []
+            }
     except Exception as e:
         logger.error(f"Error listing games for team {team_id}: {str(e)}")
         raise HTTPException(
@@ -126,31 +110,60 @@ async def get_game(team_id: str, game_id: str):
         
         # Get game data with explicit column selection
         game_blob_name = f"games/team_{team_id}/game_{game_id}.parquet"
+        
+        # First check if the blob exists
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        blob_client = container_client.get_blob_client(game_blob_name)
+        
+        if not blob_exists(blob_client):
+            return {
+                "status": "error",
+                "message": f"Game {game_id} not found for team {team_id}",
+                "detail": "Create a new game with this ID, or choose another game ID."
+            }
+            
         try:
+            # First, try to get a list of available columns
+            columns_query = f"""
+                DESCRIBE SELECT * FROM read_parquet('azure://{CONTAINER_NAME}/{game_blob_name}')
+            """
+            columns_df = con.execute(columns_query).fetchdf()
+            available_columns = columns_df['column_name'].tolist() if not columns_df.empty else []
+            
+            # Build a query based on available columns
+            select_fields = []
+            expected_columns = ['user_team', 'coach', 'away_team_name', 'event_date', 
+                               'event_hour', 'event_minute', 'field_name', 'field_location', 
+                               'field_type', 'field_temperature', 'game_status', 'my_team_ha']
+            
+            for col in expected_columns:
+                if col in available_columns:
+                    select_fields.append(col)
+                else:
+                    # Use a default value for missing columns
+                    if col == 'user_team':
+                        select_fields.append(f"'{team_id}' as user_team")
+                    elif col in ['event_hour', 'event_minute']:
+                        select_fields.append(f"0 as {col}")
+                    else:
+                        select_fields.append(f"'' as {col}")
+            
+            # Create and execute the query with only available columns
             game_query = f"""
                 SELECT 
-                    user_team,
-                    coach,
-                    away_team_name,
-                    event_date,
-                    event_hour,
-                    event_minute,
-                    field_name,
-                    field_location,
-                    field_type,
-                    field_temperature,
-                    game_status,
-                    my_team_ha
+                    {", ".join(select_fields)}
                 FROM read_parquet('azure://{CONTAINER_NAME}/{game_blob_name}')
             """
             game_df = con.execute(game_query).fetchdf()
             
             # Handle the case where data might be empty
             if game_df.empty:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Game {game_id} not found for team {team_id} or data is empty"
-                )
+                return {
+                    "status": "error",
+                    "message": f"Game {game_id} exists but contains no data for team {team_id}",
+                    "detail": "The game file exists but has no data. You may need to recreate this game."
+                }
                 
             game_data = game_df.to_dict(orient='records')[0]
             
@@ -158,20 +171,22 @@ async def get_game(team_id: str, game_id: str):
             game_data['game_id'] = game_id  # Add game_id from the request
             
         except Exception as e:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Game {game_id} not found for team {team_id}: {str(e)}"
-            )        
-    except HTTPException:
-        raise
+            logger.error(f"Error reading game data: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Error reading game {game_id} for team {team_id}",
+                "detail": f"There was an error reading the game data: {str(e)}"
+            }
     except Exception as e:
         logger.error(f"Error getting game {game_id} for team {team_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error getting game {game_id} for team {team_id}: {str(e)}"
-        )
+        return {
+            "status": "error",
+            "message": f"General error with game {game_id} for team {team_id}",
+            "detail": f"There was a general error: {str(e)}"
+        }
     
     return {
+        "status": "success",
         "team_id": team_id,
         "game_id": game_id,  # Include game_id in the response
         "game_data": game_data

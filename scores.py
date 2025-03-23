@@ -1,6 +1,6 @@
 from utils import *  # Import all common utilities
 import duckdb
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator, ValidationError, field_validator
 from fastapi import APIRouter, HTTPException, Body, Path, Query
 from io import BytesIO
 from typing import Optional, List
@@ -43,112 +43,103 @@ class InningScores(BaseModel):
     scores: List[ScoreData]
 
 class PlateAppearanceData(BaseModel):
-    teamId: str
-    gameId: str
-    inning_number: int
-    home_or_away: str
-    my_team_ha: str
     order_number: int
-    batter_jersey_number: str
-    batter_name: str
     batter_seq_id: int
-    out: int
-    out_at: int
-    pitch_count: int
-    balls_before_play: int
-    strikes_before_play:  Optional[int] = 0
-    strikes_unsure:  Optional[int] = 0
-    strikes_watching:  Optional[int] = 0
-    strikes_swinging:  Optional[int] = 0
-    ball_swinging:  Optional[int] = 0
-    fouls:  Optional[int] = 0
-    wild_pitches: Optional[int] = 0
-    wild_pitch:  Optional[int] = 0
-    passed_ball:  Optional[int] = 0
-    rbi:  Optional[int] = 0
-    late_swings: Optional[int] = 0
-    qab: Optional[int] = 0
-    hard_hit: Optional[int] = 0
-    slap: Optional[int] = 0
-    sac: Optional[int] = 0
-    pa_result: str
-    pa_why: Optional[str] = ""
-    hit_to:  Optional[int] = 0
-    pa_error_on:  Optional[str] = 0
-    br_result: Optional[int] = 0
-    br_stolen_bases: Optional[str] = "" #this is a list of text wtih values "1","2","3","4" how do I parse this?
-    br_error_on: Optional[str] = ""
-    base_running_hit_around:  Optional[str] = ""
-###########################################################
-# 1 - Plate appearance
-###########################################################
-@router.post("/api/plate-appearance", status_code=201)
-async def save_plate_appearance(data: dict = Body(...)):
-    try:
-        # Ensure required fields are present
-        required_fields = ["team_id", "game_id", "inning_number", "home_or_away", "batter_seq_id"]
-        for field in required_fields:
-            if field not in data:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Missing required field: {field}"
-                )
-        # Properly handle array fields during save
-        ARRAY_FIELDS = ["base_running_hit_around", "br_stolen_bases", "pa_error_on", "br_error_on"]
-        for field in ARRAY_FIELDS:
-            if field in data:
-                # If it's already a list, keep it
-                if isinstance(data[field], list):
-                    continue
-                # If it's a string representation of a list, parse it
-                elif isinstance(data[field], str):
-                    try:
-                        if data[field].startswith('[') and data[field].endswith(']'):
-                            data[field] = ast.literal_eval(data[field])
-                        elif data[field]:  # If not empty string
-                            data[field] = [data[field]]
-                        else:  # Empty string
-                            data[field] = []
-                    except:
-                        data[field] = [] if not data[field] else [data[field]]
-                # If it's some other value, wrap it in a list if not empty
-                elif data[field]:
-                    data[field] = [data[field]]
-                else:
-                    data[field] = []
-        # Convert to DataFrame
-        df = pd.DataFrame([data])
-        team_data_key = "home" if data["home_or_away"] == "home" else "away"
-        blob_name = f"games/team_{data['team_id']}/game_{data['game_id']}/inning_{data['inning_number']}/{team_data_key}_{data['batter_seq_id']}.parquet"
-        parquet_buffer = BytesIO()
-        df.to_parquet(parquet_buffer)
-        parquet_buffer.seek(0)
-        blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        blob_client = container_client.get_blob_client(blob_name)
-        blob_client.upload_blob(parquet_buffer, overwrite=True)
-        print("------1 - SAVE PLATE APPEARANCE ------------")
-        print(f": {list(df.columns)}")
-        print(f"first row sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
-        print("----------------------------------------------")
-        return {
-            "status": "success",
-            "message": f"Plate appearance data saved for team {data['team_id']}, game {data['game_id']}, inning {data['inning_number']}, batter sequence {data['batter_seq_id']}",
-            "blob_path": blob_name,
-            "team_choice": data["home_or_away"],
-            "my_team_ha": data.get("my_team_ha", "home")
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"Error saving plate appearance data: {error_details}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error saving plate appearance data: {str(e)}"
-        )
+    inning_number: int
+    home_or_away: str = Field(...)
+    batting_order_position: int
+    team_id: int
+    teamId: int
+    game_id: int
+    gameId: int
+    out: int = Field(..., ge=0, le=1)
+    my_team_ha: str = Field(...)
+    wild_pitch: int = Field(..., ge=0, le=50)
+    passed_ball: int = Field(..., ge=0, le=50)
+    rbi: int = Field(..., ge=0, le=3)
+    late_swings: int = Field(..., ge=0, le=5)
+    qab: int = Field(..., ge=0, le=1)
+    hard_hit: int = Field(..., ge=0, le=1)
+    slap: int = Field(..., ge=0, le=1)
+    sac: int = Field(..., ge=0, le=1)
+    out_at: int = Field(..., ge=0, le=4)
+    pa_why: Optional[str]
+    pa_result: int = Field(..., ge=0, le=4)
+    hit_to: int = Field(..., ge=0, le=9)
+    br_result: int = Field(..., ge=0, le=4)
+    pa_error_on: List[int] = []
+    br_stolen_bases: List[int] = []
+    base_running_hit_around: List[int] = []
+    br_error_on: List[int] = []
+    pitch_count: int = Field(..., ge=0, le=50)
+    balls_before_play: int = Field(..., ge=0, le=3)
+    strikes_before_play: int = Field(..., ge=0, le=2)
+    strikes_unsure: int = Field(..., ge=0, le=2)
+    strikes_watching: int = Field(..., ge=0, le=2)
+    strikes_swinging: int = Field(..., ge=0, le=2)
+    ball_swinging: int = Field(..., ge=0, le=2)
+    fouls: int = Field(0, ge=0, le=50)  # Adding fouls field with default value
 
+    @field_validator('home_or_away', 'my_team_ha')
+    def validate_home_away(cls, v):
+        if v not in {"home", "away"}:
+            raise ValueError("must be 'home' or 'away'")
+        return v
+
+    @field_validator('pa_error_on', 'br_error_on')
+    def validate_position_lists(cls, v, info):
+        if not isinstance(v, list):
+            if isinstance(v, (int, float)) and not pd.isna(v):
+                v = int(v)
+                if 0 <= v <= 9:
+                    return [v]
+            return []
+        result = []
+        for item in v:
+            try:
+                if item == "":
+                    continue
+                if isinstance(item, str) and item.isdigit():
+                    val = int(item)
+                    if 0 <= val <= 9:
+                        result.append(val)
+                elif isinstance(item, (int, float)) and not pd.isna(item):
+                    val = int(item)
+                    if 0 <= val <= 9:
+                        result.append(val)
+            except (ValueError, TypeError):
+                pass
+                
+        return result
+        
+    @field_validator('br_stolen_bases', 'base_running_hit_around')
+    def validate_base_lists(cls, v, info):
+        if not isinstance(v, list):
+            if isinstance(v, (int, float)) and not pd.isna(v):
+                v = int(v)
+                if 0 <= v <= 4:
+                    return [v]
+            return []
+        result = []
+        for item in v:
+            try:
+                if item == "":
+                    continue
+                if isinstance(item, str) and item.isdigit():
+                    val = int(item)
+                    if 0 <= val <= 4:
+                        result.append(val)
+                elif isinstance(item, (int, float)) and not pd.isna(item):
+                    val = int(item)
+                    if 0 <= val <= 4:
+                        result.append(val)
+            except (ValueError, TypeError):
+                pass
+                
+        return result
+###########################################################
+# DELETE PLATE APPEARANCE
+########################################################### 
 @router.delete("/api/plate-appearance/{team_id}/{game_id}/{inning_number}/{team_choice}/{batter_seq_id}")
 async def delete_plate_appearance(
     team_id: str,
@@ -191,6 +182,63 @@ async def delete_plate_appearance(
             detail=f"Error deleting plate appearance: {str(e)}"
         )
 ###########################################################
+# 1 - Plate appearance
+###########################################################
+@router.post("/api/plate-appearance", status_code=201)
+#I wan to apply the pa_model to the data
+async def save_plate_appearance(pa_data: dict = Body(...)):
+    try:
+        # Validate data using PlateAppearanceData model
+        try:
+            pa_model = PlateAppearanceData(**pa_data)
+            pa_data = pa_model.model_dump()
+        except ValidationError as e:
+                print(e.errors())  # This will give you a structured list of errors.
+                print(e.json())    # This will print the errors as JSON, which is great for debugging.
+                raise HTTPException(
+                    status_code=422,
+                    detail=e.errors()  # you can even return structured error details instead of string
+                )
+        #print the validated data:
+        print("------1 - VALIDATE PLATE APPEARANCE ------------")
+        print(f"Validated data: {pa_data}")
+        print("----------------------------------------------")
+        # Convert to DataFrame
+        df = pd.DataFrame([pa_data])
+        team_data_key = "home" if pa_data["home_or_away"] == "home" else "away"
+        blob_name = f"games/team_{pa_data['team_id']}/game_{pa_data['game_id']}/inning_{pa_data['inning_number']}/{team_data_key}_{pa_data['batter_seq_id']}.parquet"
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(parquet_buffer, overwrite=True)
+
+        print("------1A - SAVE PA DF (*) ------------")
+        print(f"calculate inning score batters_dfcolumns: {list(df.columns)}")
+        print(f"First row sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
+        print("----------------------------------------------")
+        
+        return {
+            "status": "success",
+            "message": f"Plate appearance data saved for team {pa_data['team_id']}, game {pa_data['game_id']}, inning {pa_data['inning_number']}, batter sequence {pa_data['batter_seq_id']}",
+            "blob_path": blob_name,
+            "team_choice": pa_data["home_or_away"],
+            "my_team_ha": pa_data.get("my_team_ha", "home")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error saving plate appearance data: {error_details}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving plate appearance data: {str(e)}"
+        )
+
+###########################################################
 # 2 - calculate the inning score
 ###########################################################
 @router.post("/{team_id}/{game_id}/{inning_number}/{team_choice}/calculate-score")
@@ -205,125 +253,62 @@ async def calculate_score(team_id: str, game_id: str, inning_number: int, team_c
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         plate_appearance_blob_name = f"games/team_{team_id}/game_{game_id}/inning_{inning_number}/{team_choice}_*.parquet"    
-        try:
-            schema_query = f"""
-                DESCRIBE SELECT * FROM read_parquet('azure://{CONTAINER_NAME}/{plate_appearance_blob_name}', union_by_name=True)
-            """
-            schema_df = con.execute(schema_query).fetchdf()
-            # Check for required columns
-            required_columns = [
-                "team_id", "game_id", "inning_number", "home_or_away", 
-                "pa_result", "pa_why", "br_result", "pa_error_on", "br_error_on",
-                "hard_hit", "strikes_before_play", "pitch_count", "out"
-            ]
-            
-            available_columns = set(schema_df['column_name'].tolist())
-            missing_columns = [col for col in required_columns if col not in available_columns]
-            if missing_columns:
-                return {
-                    "status": "error",
-                    "message": f"Missing required columns: {missing_columns}",
-                    "detail": "The parquet files for this inning are missing required columns. Check your data collection process."
-                }
-        except Exception as e:
-            error_msg = str(e)
-            if "Failed to read Parquet file" in error_msg:
-                return {
-                    "status": "error",
-                    "message": f"No plate appearance data found for {team_choice} team in inning {inning_number}",
-                    "detail": "Please record plate appearances before calculating scores."
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Error checking parquet schema: {error_msg}",
-                    "detail": "There was an error accessing or analyzing the parquet files."
-                }
-        
         # Continue with your existing logic for valid data
         batters_df = pd.DataFrame()
         try:
-            simple_query = f"""
-                SELECT  *
-                FROM read_parquet('azure://{CONTAINER_NAME}/{plate_appearance_blob_name}', union_by_name=True)
-            """
-            df = con.execute(simple_query).fetchdf()
-            if not df.empty:
-                # Calculate strikes - total strikes and total pitches
-                df['total_strikes'] = df.apply(lambda row: 
-                    1 if row['pa_why'] in ['H', 'B','HR','GS','E','C','K','KK','GO','FO','LO','FB'] else 0, axis=1) + df['strikes_before_play']
-                df['total_pitches'] = df['pitch_count']
-                # Calculate on-base metrics
-                df['on_base_count'] = df.apply(lambda row: 1 if str(row['pa_result']) in ['1', '2', '3', '4'] else 0, axis=1)
-                df['plate_appearances'] = 1  # Each row is one plate appearance
-                # Calculate basic stats
-                df['out'] = df.apply(lambda row: 1 if row['out'] == 1 else 0, axis=1)
-                df['runs'] = df.apply(lambda row: 1 if row['br_result'] == 4 or str(row['pa_result']) == '4' else 0, axis=1)
-                df['strikeouts'] = df.apply(lambda row: 1 if row['pa_why'] in ['KK', 'K'] else 0, axis=1)
-                df['walks'] = df.apply(lambda row: 1 if row['pa_why'] in ['BB', 'HBP'] else 0, axis=1)
-                df['hits'] = df.apply(lambda row: 1 if row['pa_why'] in ['H', 'HR', 'GS', 'S', 'B'] else 0, axis=1)
-                #I want to convert this to a string and then remove brackets, commas, spaces, [, ] and then count the number of characters
-                df['errors'] = df.apply(
-                    lambda row: 
-                        # Count elements in error arrays
-                        count_errors(row['pa_error_on']) + count_errors(row['br_error_on']) +
-                        # If pa_why is 'E' AND there are no elements in the error arrays, add 1
-                        (1 if row['pa_why'] == 'E' and 
-                             count_errors(row['pa_error_on']) == 0 and 
-                             count_errors(row['br_error_on']) == 0 
-                         else 0), 
-                    axis=1
+            # New improved query that directly aggregates all required columns
+            aggregate_query = f"""
+                WITH plate_appearances AS (
+                    SELECT *,
+                            CASE WHEN COALESCE(pitch_count, 0) > 0 THEN  
+                            pitch_count - (COALESCE(CASE WHEN pa_why IN ('HBP','BB') THEN 1 ELSE 0 END, 0) +
+                            COALESCE(balls_before_play, 0))
+                            ELSE 0 END
+                        AS total_strikes,
+                        CASE WHEN pa_result > 0 THEN 1 ELSE 0 END AS on_base_count,
+                        CASE 
+                            WHEN (len(pa_error_on) + len(br_error_on)) > 0 THEN (len(pa_error_on) + len(br_error_on)) 
+                            WHEN (len(pa_error_on) + len(br_error_on)) = 0 AND pa_why = 'E' THEN 1
+                            ELSE 0 END AS errors,
+                        1 as plate_appearances,
+                        CASE WHEN br_result = 4 OR pa_result = 4 THEN 1 ELSE 0 END AS runs,
+                        CASE WHEN pa_why in ['KK','K'] THEN 1 ELSE 0 END AS strikeouts,
+                        CASE WHEN pa_why in ['BB','HBP'] THEN 1 ELSE 0 END AS walks,
+                        CASE WHEN pa_why in ['H','HR','GS','S','B'] THEN 1 ELSE 0 END AS hits,
+                        CASE WHEN (pa_result = 1 OR br_result = 1) AND NOT (br_result IN [2,3,4] OR out = 1 OR pa_result IN [0,2,3,4]) THEN 1 ELSE 0 END AS on_first_base,
+                        CASE WHEN (pa_result = 2 OR br_result = 2) AND NOT (br_result IN [3,4] OR out = 1 OR pa_result IN [0,3,4]) THEN 1 ELSE 0 END AS on_second_base,
+                        CASE WHEN (pa_result = 3 OR br_result = 3) AND NOT (br_result IN [4] OR out = 1 OR pa_result IN [0,4]) THEN 1 ELSE 0 END AS on_third_base,
+                    FROM read_parquet('azure://{CONTAINER_NAME}/{plate_appearance_blob_name}', union_by_name=True)
                 )
-                df['on_first_base']  = df.apply(lambda row: 1 if (row['pa_result'] == 1 or row['br_result'] == 1) and not (row['br_result'] in [2,3,4] or row['out'] == 1 or row['pa_result'] in [0,2,3,4]) else 0, axis=1)
-                df['on_second_base'] = df.apply(lambda row: 1 if (row['pa_result'] == 2 or row['br_result'] == 2) and not (row['br_result'] in [3,4] or row['out'] == 1 or row['pa_result'] in [0,3,4]) else 0, axis=1)
-                df['on_third_base']  = df.apply(lambda row: 1 if (row['pa_result'] == 3 or row['br_result'] == 3) and not (row['br_result'] in [4] or row['out'] == 1 or row['pa_result'] in [0,4]) else 0, axis=1)
-                # Group by team info and sum the basic counts
-                aggregated = df.groupby(['team_id','game_id', 'inning_number', 'home_or_away']).agg({
-                    'runs': 'sum',
-                    'hits': 'sum',
-                    'errors': 'sum',
-                    'strikeouts': 'sum',
-                    'walks': 'sum',
-                    'out': 'sum',
-                    'hard_hit': 'sum',
-                    'total_strikes': 'sum',
-                    'total_pitches': 'sum',
-                    'on_base_count': 'sum',
-                    'plate_appearances': 'sum',
-                    'on_first_base': 'sum',
-                    'on_second_base': 'sum',
-                    'on_third_base': 'sum'  
-                }).reset_index()
-                # Calculate percentages - ensure they're stored as ints
-                aggregated['strike_percent'] = (aggregated['total_strikes'] / aggregated['total_pitches']*100 ).fillna(0.0).astype(int)
-                aggregated['on_base_percent'] = (aggregated['on_base_count'] / aggregated['plate_appearances']*100).fillna(0.0).astype(int)  
-                # Explicitly round to 2 decimal places
-                aggregated['strike_percent'] = aggregated['strike_percent'].round(0)
-                aggregated['on_base_percent'] = aggregated['on_base_percent'].round(0)
-                # Drop the working columns
-                aggregated = aggregated.drop(['total_strikes', 'total_pitches', 'on_base_count', 'plate_appearances'], axis=1)
-                batters_df = aggregated               
-                # Make absolutely sure the column data types are preserved
-                numeric_cols = ['runs', 'hits', 'errors', 'strikeouts', 'walks', 'out', 'hard_hit', 'strike_percent', 'on_base_percent', 'on_first_base', 'on_second_base', 'on_third_base']
-                for col in numeric_cols:
-                    if col in ['strike_percent', 'on_base_percent']:
-                        batters_df[col] = batters_df[col].astype(int)                 
+                            SELECT
+                                team_id,
+                                game_id,
+                                inning_number,
+                                home_or_away,
+                                SUM(runs) AS runs,
+                                SUM(hits) AS hits,
+                                SUM(errors) AS errors,
+                                SUM(strikeouts) AS strikeouts,
+                                SUM(walks) AS walks,
+                                SUM(out) AS out,
+                                SUM(hard_hit) AS hard_hit,
+                                SUM(on_first_base) AS on_first_base,
+                                SUM(on_second_base) AS on_second_base,
+                                SUM(on_third_base) AS on_third_base,
+                                CAST(COALESCE(ROUND(SUM(total_strikes) * 100.0 / NULLIF(SUM(pitch_count), 0), 0), 0) AS INTEGER) AS strike_percent,
+                                CAST(COALESCE(ROUND(SUM(on_base_count) * 100.0 / NULLIF(SUM(plate_appearances), 0), 0), 0) AS INTEGER) AS on_base_percent,
+                                SUM(pitch_count) AS total_pitches,
+                            FROM plate_appearances
+                            GROUP BY team_id, game_id, inning_number, home_or_away
+            """
+            batters_df = con.execute(aggregate_query).fetchdf()
                 
-                # After all calculations, verify the batters_df is not empty
-                if batters_df.empty:
-                    print("ERROR: batters_df is empty after aggregation!")
-                    return {
-                        "status": "error",
-                        "message": "Failed to calculate score: The aggregated data is empty",
-                        "detail": "Check your original data and aggregation logic"
-                    }
-                
-                # Print diagnostic info about the DataFrame
-                print("------2 - CALCULATE-INNING-SCORE ------------")
-                print(f"calculate inning score batters_dfcolumns: {list(batters_df.columns)}")
-                print(f"First row sample: {batters_df.iloc[0].to_dict() if not batters_df.empty else 'No data'}")
-                print("----------------------------------------------")
-            else:
+            print("------2 - CALCULATE-INNING-SCORE (*) ------------")
+            print(f"calculate inning score batters_df columns: {list(batters_df.columns)}")
+            print(f"First row sample: {batters_df.iloc[0].to_dict() if not batters_df.empty else 'No data'}")
+            print("----------------------------------------------")
+            
+            if batters_df.empty:
                 print("ERROR: Source DataFrame is empty - no data in parquet files")
                 return {
                     "status": "error",
@@ -386,30 +371,41 @@ async def get_game_summary(team_id: str, game_id: str):
     """
     try:
         con = get_duckdb_connection()
-        # Step 1: Get game header info
-        game_info_blob_name = f"games/team_{team_id}/game_{game_id}.parquet"       
-        # Initialize game_header with default values
-        game_header = {
-            "user_team": "Unknown", 
-            "coach": "Unknown", 
-            "opponent_name": "Unknown",
-            "event_date": "", 
-            "event_hour": 0,
-            "event_minute": 0,
-            "field_name": "",
-            "field_location": "",
-            "field_type": "",
-            "field_temperature": 0,
-            "game_status": "In Progress",
-            "my_team_ha": "home",
-            "game_id": game_id
+        
+        # Initialize default response structure with blanks
+        response = {
+            "game_header": {
+                "user_team": team_id, 
+                "coach": "Unknown", 
+                "opponent_name": "Unknown",
+                "event_date": "", 
+                "event_hour": 0,
+                "event_minute": 0,
+                "field_name": "",
+                "field_location": "",
+                "field_type": "",
+                "field_temperature": 0,
+                "game_status": "open",
+                "my_team_ha": "home",
+                "game_id": game_id
+            },
+            "innings": {str(i): {
+                "home": {"runs": 0, "strike_percent": 0, "hard_hit": 0, "hits": 0, "outs": 0, "errors": 0, "walks": 0, "strikeouts": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0},
+                "away": {"runs": 0, "strike_percent": 0, "hard_hit": 0, "hits": 0, "outs": 0, "errors": 0, "walks": 0, "strikeouts": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0}
+            } for i in range(1, 8)},
+            "totals": {
+                "home": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "strikeouts": 0},
+                "away": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "strikeouts": 0}
+            }
         }
         
-        # Try to get header info but continue if not found
+        # Step 1: Populate game header
+        game_header_populated = False
         try:
+            game_info_blob_name = f"games/team_{team_id}/game_{game_id}.parquet"       
             header_query = f"""
                 SELECT 
-                  user_team
+                  {team_id} as user_team
                 , my_team_ha
                 , coach
                 , away_team_name as opponent_name
@@ -420,157 +416,110 @@ async def get_game_summary(team_id: str, game_id: str):
                 , field_location
                 , field_type
                 , field_temperature
-                , game_status
-                , game_id
+                , COALESCE(game_status, 'open') as game_status
+                , {game_id} as game_id
                 FROM read_parquet('azure://{CONTAINER_NAME}/{game_info_blob_name}')
             """
             game_header_df = con.execute(header_query).fetchdf()
             if not game_header_df.empty:
-                print("------3a - GAME-HEADER-INFO ------------")
-                print(f"game_header_df columns: {list(game_header_df.columns)}")
-                print(f"game_header_df sample: {game_header_df.iloc[0].to_dict() if not game_header_df.empty else 'No data'}")
-                print("----------------------------------------------")
-                game_header = game_header_df.iloc[0].to_dict()
-                team_choice = game_header['my_team_ha'].lower()
+                response["game_header"] = game_header_df.iloc[0].to_dict()
+                game_header_populated = True
+                logger.info(f"Game header populated for team {team_id}, game {game_id}")
         except Exception as e:
             logger.warning(f"Error getting game header: {str(e)}")
-            # Continue with default header values
         
-        # Step 2: Initialize data structures
-        innings_data = {}
-        for i in range(1, 8):
-            innings_data[str(i)] = {
-                "home": {
-                    "runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, 
-                    "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0, 
-                    "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []
-                },
-                "away": {
-                    "runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, 
-                    "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0,
-                    "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []
-                }
-            }
-        totals = {
-            "home": {
-                "runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, 
-                "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0,
-                "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []
-            },
-            "away": {
-                "runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, 
-                "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0,
-                "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []
-            }
-        }
-        
-        # Step 3: Get box score data for both teams
-        all_innings_data = {}
-        
-        # Get all innings data from both teams
+        # Step 2: Populate innings data
         try:
             game_innings_blob_name = f"games/team_{team_id}/game_{game_id}/box_score/*.parquet"              
             query = f"""
-                SELECT *   
+                SELECT 
+                  home_or_away
+                , inning_number
+                , runs
+                , strike_percent
+                , hard_hit
+                , hits
+                , out as outs
+                , walks
+                , strikeouts
+                , errors
+                , on_first_base
+                , on_second_base
+                , on_third_base
                 FROM read_parquet('azure://{CONTAINER_NAME}/{game_innings_blob_name}', union_by_name=True)
-                """
+            """
             innings_df = con.execute(query).fetchdf()
-            print("------3b - INNINGS-DF-RETRIEVAL ------------")
-            print(f"innings_df columns: {list(innings_df.columns)}")
-            print(f"innings_df sample: {innings_df.iloc[0].to_dict() if not innings_df.empty else 'No data'}")
-            print("----------------------------------------------")
             
-            if not innings_df.empty:                        
+            if not innings_df.empty:
+                # Track totals across innings
+                totals = {
+                    "home": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "strikeouts": 0},
+                    "away": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "strikeouts": 0}
+                }
+                
+                # Process each inning and update the response
                 for _, row in innings_df.iterrows():
                     inning = int(row['inning_number'])
                     team = row['home_or_away'].lower()
-                    
-                    if 1 <= inning <= 7:  # Only process innings 1-7
-                        if inning not in all_innings_data:
-                            all_innings_data[inning] = {"home": {}, "away": {}}
-                        
-                        all_innings_data[inning][team] = {
-                            "runs": int(row['runs']),
-                            "hits": int(row['hits']),
-                            "errors": int(row['errors']),
-                            "walks": int(row['walks']),
-                            "outs": int(row['out']),
-                            "strikeouts": int(row['strikeouts']),
-                            "hard_hit": int(row['hard_hit']),
-                            "strike_percent": int(row['strike_percent']),
-                            "on_base_percent": int(row['on_base_percent']),
-                            "on_first_base": int(row['on_first_base']),
-                            "on_second_base": int(row['on_second_base']),
-                            "on_third_base": int(row['on_third_base']),
-                            "runners_on_base": []
-                        }
-        except Exception as e:
-            error_msg = str(e)
-            if "No files found that match the pattern" in error_msg:
-                logger.warning(f"No box score files found: {error_msg}")
-            else:
-                logger.error(f"Error retrieving box score data: {error_msg}")
-        
-        # Step 4: Process the data, swapping errors and strike_percent
-        swapped_totals = {
-            "home": {"errors": 0, "strike_percent": []},
-            "away": {"errors": 0, "strike_percent": []}
-        }
-        
-        for inning, inning_data in all_innings_data.items():
-            inning_str = str(inning)
-            
-            # Copy most stats directly
-            for team in ["home", "away"]:
-                if team in inning_data:
-                    for stat, value in inning_data[team].items():
-                        # Skip errors and strike_percent, we'll handle them separately
-                        if stat not in ["errors", "strike_percent"]:
-                            innings_data[inning_str][team][stat] = value
-            
-            # Now swap errors and strike_percent between teams
-            for team, opposite in [("home", "away"), ("away", "home")]:
-                if team in inning_data:
-                    # Swap errors - defensive team's errors
-                    if "errors" in inning_data[team]:
-                        innings_data[inning_str][opposite]["errors"] = inning_data[team]["errors"]
-                        swapped_totals[opposite]["errors"] += inning_data[team]["errors"]
-                    
-                    # Swap strike_percent - pitcher's strike percentage
-                    if "strike_percent" in inning_data[team]:
-                        innings_data[inning_str][opposite]["strike_percent"] = inning_data[team]["strike_percent"]
-                        # Store non-zero values for averaging later
-                        if inning_data[team]["strike_percent"] > 0:
-                            swapped_totals[opposite]["strike_percent"].append(inning_data[team]["strike_percent"])
-        
-        # Step 5: Calculate totals
-        for team in ["home", "away"]:
-            team_innings = [innings_data[str(i)][team] for i in range(1, 8) if str(i) in innings_data]
-            if team_innings:
-                # Sum up the numeric stats (excluding errors and strike_percent which we've already swapped)
-                for stat in ["runs", "hits", "walks", "outs", "strikeouts", "hard_hit", "on_first_base", "on_second_base", "on_third_base"]:
-                    # Check if all innings have this stat before summing
-                    totals[team][stat] = sum(inning.get(stat, 0) for inning in team_innings)
+                    if 1 <= inning <= 7:
+                        inning_str = str(inning)
+                        # Copy stats to the innings structure
+                        for stat in ['runs', 'strike_percent', 'hard_hit', 'hits', 'outs', 'errors', 'on_first_base', 'on_second_base', 'on_third_base']:
+                            if stat in row:
+                                response["innings"][inning_str][team][stat] = int(row[stat])
+                        # Add stats to totals
+                        for stat in ['runs', 'hits', 'errors', 'walks', 'strikeouts']:
+                            if stat in row:
+                                totals[team][stat] += int(row[stat])
+                        # Store errors and strike_percent for swapping
+                        if 'errors' in row:
+                            response["innings"][inning_str][team]['errors'] = int(row['errors'])
+                            totals[team]['errors'] += int(row['errors'])
+                        if 'strike_percent' in row:
+                            response["innings"][inning_str][team]['strike_percent'] = int(row['strike_percent'])
                 
-                # For on_base_percent, take the average of non-zero values
-                on_base_values = [inning["on_base_percent"] for inning in team_innings 
-                                  if "on_base_percent" in inning and inning["on_base_percent"] > 0]
-                if on_base_values:
-                    totals[team]["on_base_percent"] = sum(on_base_values) / len(on_base_values)
-            
-            # Set the errors from our swapped totals
-            totals[team]["errors"] = swapped_totals[team]["errors"]
-            
-            # Set strike_percent from our swapped totals, using average
-            strike_values = swapped_totals[team]["strike_percent"]
-            totals[team]["strike_percent"] = sum(strike_values) / len(strike_values) if strike_values else 0
+                # Update the totals in the response
+                for team in ['home', 'away']:
+                    for stat in ['runs', 'hits', 'walks', 'strikeouts', 'errors']:
+                        response["totals"][team][stat] = totals[team][stat]
+                
+                # Step 3: Swap errors and strike_percent between teams
+                for inning_str in response["innings"]:
+                    # Swap errors - defensive team's errors are credited to the offensive team
+                    home_errors = response["innings"][inning_str]["home"]["errors"]
+                    away_errors = response["innings"][inning_str]["away"]["errors"]
+                    response["innings"][inning_str]["home"]["errors"] = away_errors
+                    response["innings"][inning_str]["away"]["errors"] = home_errors
+                    
+                    # Swap strike_percent - pitcher's strike percentage is credited to the defensive team
+                    home_strike_percent = response["innings"][inning_str]["home"]["strike_percent"]
+                    away_strike_percent = response["innings"][inning_str]["away"]["strike_percent"]
+                    response["innings"][inning_str]["home"]["strike_percent"] = away_strike_percent
+                    response["innings"][inning_str]["away"]["strike_percent"] = home_strike_percent
+                    
+                    # Swap strikeouts - pitcher's strikeouts are credited to the defensive team
+                    home_strikeouts = response["innings"][inning_str]["home"]["strikeouts"]
+                    away_strikeouts = response["innings"][inning_str]["away"]["strikeouts"]
+                    response["innings"][inning_str]["home"]["strikeouts"] = away_strikeouts
+                    response["innings"][inning_str]["away"]["strikeouts"] = home_strikeouts
+                
+                # Swap totals for errors
+                home_total_errors = response["totals"]["home"]["errors"]
+                away_total_errors = response["totals"]["away"]["errors"]
+                response["totals"]["home"]["errors"] = away_total_errors
+                response["totals"]["away"]["errors"] = home_total_errors
+                
+                # Swap totals for strikeouts
+                home_total_strikeouts = response["totals"]["home"]["strikeouts"]
+                away_total_strikeouts = response["totals"]["away"]["strikeouts"]
+                response["totals"]["home"]["strikeouts"] = away_total_strikeouts
+                response["totals"]["away"]["strikeouts"] = home_total_strikeouts
+                
+                logger.info(f"Innings data populated for team {team_id}, game {game_id}")
+                
+        except Exception as e:
+            logger.warning(f"Error retrieving innings data: {str(e)}")
         
-        # Return the formatted response that matches the required JSON structure
-        response = {
-            "game_header": game_header,
-            "innings": innings_data,
-            "totals": totals
-        }           
         return response
         
     except Exception as e:
@@ -578,32 +527,8 @@ async def get_game_summary(team_id: str, game_id: str):
         import traceback
         logger.error(traceback.format_exc())
         
-        # Return a valid response structure with error info
-        return {
-            "game_header": {
-                "user_team": "Error", 
-                "coach": "Unknown", 
-                "opponent_name": "Unknown",
-                "event_date": "", 
-                "event_hour": 0,
-                "event_minute": 0,
-                "field_name": "",
-                "field_location": "",
-                "field_type": "",
-                "field_temperature": 0,
-                "game_status": "Error",
-                "my_team_ha": "home",
-                "game_id": game_id
-            },
-            "innings": {str(i): {
-                "home": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []},
-                "away": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []}
-            } for i in range(1, 8)},
-            "totals": {
-                "home": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []},
-                "away": {"runs": 0, "hits": 0, "errors": 0, "walks": 0, "outs": 0, "strikeouts": 0, "hard_hit": 0, "strike_percent": 0, "on_base_percent": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0, "runners_on_base": []}
-            }
-        }
+        # We'll still return the structure initialized at the beginning of the function
+        return response
 
 ###########################################################
 # 4 - get the inning scorebook by attempt (this is the big data grid)
@@ -691,7 +616,7 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
                     try:
                         # Handle numpy arrays
                         if isinstance(val, np.ndarray):
-                            return val.tolist()
+                            return [int(x) if isinstance(x, (int, float)) or (isinstance(x, str) and x.isdigit()) else x for x in val.tolist()]
                         
                         # Handle None/NaN values
                         if pd.isna(val) or val is None:
@@ -705,29 +630,35 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
                         if isinstance(val, str):
                             if val.startswith('[') and val.endswith(']'):
                                 try:
+                                    # Parse the list and convert numeric strings to integers
                                     result = ast.literal_eval(val)
-                                    return result if isinstance(result, list) else [result]
+                                    if isinstance(result, list):
+                                        return [int(x) if isinstance(x, (int, float)) or (isinstance(x, str) and x.isdigit()) else x for x in result]
+                                    else:
+                                        return [int(result) if isinstance(result, (int, float)) or (isinstance(result, str) and result.isdigit()) else result]
                                 except (SyntaxError, ValueError):
                                     # If literal_eval fails, try a direct split approach
                                     if ',' in val:
-                                        return [item.strip() for item in val.strip('[]').split(',')]
+                                        items = [item.strip() for item in val.strip('[]').split(',')]
+                                        return [int(x) if x.isdigit() else x for x in items]
                                     # For single item in brackets
-                                    return [val.strip('[]')]
+                                    single_item = val.strip('[]')
+                                    return [int(single_item) if single_item.isdigit() else single_item]
                             else:
                                 # Single string value, not in brackets
-                                return [val]
+                                return [int(val) if val.isdigit() else val]
                         
                         # Handle existing lists
                         if isinstance(val, list):
-                            return val
+                            return [int(x) if isinstance(x, (int, float)) or (isinstance(x, str) and x.isdigit()) else x for x in val]
                         
                         # Handle other scalar values (numbers)
                         if isinstance(val, (int, float)) and not isinstance(val, bool):
-                            # Convert numbers to strings for consistency
-                            return [str(int(val))]
+                            # Convert numbers to integers
+                            return [int(val)]
                             
-                        # Fallback - any other type gets converted to string
-                        return [str(val)]
+                        # Fallback - any other type gets converted as is
+                        return [val]
                     
                     except Exception as e:
                         # Silent error handling - just return empty array
@@ -735,14 +666,7 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
                 
                 # Apply the conversion function to the column
                 batter_df[field] = batter_df[field].apply(convert_to_array)
-        
-        # Additional processing for hit_to - ensure it's a string
-        if 'hit_to' in batter_df.columns:
-            batter_df['hit_to'] = batter_df['hit_to'].apply(
-                lambda x: str(int(x)) if isinstance(x, (int, float)) and not pd.isna(x) else 
-                         (str(x) if isinstance(x, str) and x else "")
-            )
-        
+               
         # Ensure all expected fields are present, add with default values if missing
         expected_fields = {
             "ball_swinging": 0, "balls_before_play": 0, "base_running_hit_around": [], 
@@ -806,8 +730,30 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
         # Final check - make sure all array fields are properly formatted (without logging)
         for entry in response["scorebook_entries"]:
             for field in array_fields:
-                if field in entry and not isinstance(entry[field], list):
-                    entry[field] = [] if entry[field] is None else [entry[field]]
+                if field in entry:
+                    # If not a list, convert to a list
+                    if not isinstance(entry[field], list):
+                        entry[field] = [] if entry[field] is None else [entry[field]]
+                    
+                    # Ensure all items in the list are integers with proper range constraints
+                    if field in ["pa_error_on", "br_error_on"]:
+                        # Baseball positions (0-9)
+                        entry[field] = [
+                            int(item) if (isinstance(item, (int, float)) or (isinstance(item, str) and item.isdigit())) and 0 <= int(item) <= 9
+                            else item 
+                            for item in entry[field]
+                        ]
+                        # Filter out invalid values
+                        entry[field] = [item for item in entry[field] if isinstance(item, int) and 0 <= item <= 9]
+                    elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                        # Base numbers (0-4)
+                        entry[field] = [
+                            int(item) if (isinstance(item, (int, float)) or (isinstance(item, str) and item.isdigit())) and 0 <= int(item) <= 4
+                            else item 
+                            for item in entry[field]
+                        ]
+                        # Filter out invalid values
+                        entry[field] = [item for item in entry[field] if isinstance(item, int) and 0 <= item <= 4]
         
         return response
         
