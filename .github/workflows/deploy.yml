@@ -102,8 +102,7 @@ jobs:
           # Deploy to Container App
           az containerapp update --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            --registry-server ${{ env.REGISTRY }}
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         else
           # Deploy to Web App using azure/webapps-deploy action
           echo "Using Web App deployment"
