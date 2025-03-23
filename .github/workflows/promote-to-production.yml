@@ -21,9 +21,20 @@ jobs:
     
     steps:
     - name: Log in to Azure
+      id: azure-login
+      continue-on-error: true
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Check Azure login status
+      if: steps.azure-login.outcome != 'success'
+      run: |
+        echo "::error::Azure login failed. Please ensure AZURE_CREDENTIALS secret is properly configured."
+        echo "AZURE_CREDENTIALS should be a JSON object with clientId, clientSecret, tenantId, and subscriptionId."
+        echo "You can create the appropriate credentials by running:"
+        echo "az ad sp create-for-rbac --name \"JustScoreGitHubActions\" --role Contributor --scopes /subscriptions/<subscription-id>/resourceGroups/justscore-rg --sdk-auth"
+        exit 1
         
     - name: Set image tag
       run: |
@@ -42,4 +53,4 @@ jobs:
         
     - name: Post deployment status
       run: |
-        echo "Deployment of $CONTAINER_NAME to $APP_SERVICE_NAME completed."
+        echo "Deployment of ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} to ${{ env.APP_SERVICE_NAME }} completed."
