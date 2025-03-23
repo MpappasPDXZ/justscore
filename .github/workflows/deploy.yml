@@ -18,7 +18,7 @@ env:
   REGISTRY: justscoreacr.azurecr.io
   IMAGE_NAME: justscore
   RESOURCE_GROUP: justscore-rg
-  APP_SERVICE_NAME: justscore-app
+  APP_SERVICE_NAME: justscoreca
 
 jobs:
   build-and-deploy:
