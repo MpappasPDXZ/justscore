@@ -1,0 +1,45 @@
+name: Promote to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Container image tag to deploy (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+env:
+  REGISTRY: justscoreacr.azurecr.io
+  IMAGE_NAME: justscore
+  RESOURCE_GROUP: justscore-rg
+  APP_SERVICE_NAME: justscore-app
+
+jobs:
+  promote-to-production:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Set image tag
+      run: |
+        echo "Using image tag: ${{ github.event.inputs.image_tag || 'latest' }}"
+        echo "IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}" >> $GITHUB_ENV
+        
+    - name: Deploy to Azure App Service
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.APP_SERVICE_NAME }}
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        
+    - name: Azure logout
+      run: |
+        az logout
+        
+    - name: Post deployment status
+      run: |
+        echo "Deployment of $CONTAINER_NAME to $APP_SERVICE_NAME completed."
