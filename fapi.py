@@ -57,7 +57,7 @@ app.include_router(
 
 @app.get("/", tags=["root"])
 def read_root():
-    return {"message": "FastAPI Team Management API"}
+    return {"message": "FastAPI Team Management API v7.0.0"}
 
 # Add favicon route
 @app.get("/favicon.ico", include_in_schema=False)
