@@ -314,15 +314,13 @@ async def create_or_update_game_internal(team_id: str, game_data: GameData, game
             except Exception as e:
                 # If the blob doesn't exist, we're creating a new game with a specified ID
                 operation = "created"
-        
         # Convert to DataFrame
         game_dict = game_data.model_dump()
-        
         # Add game_id to the data
         game_dict['game_id'] = game_id
-        
         df = pd.DataFrame([game_dict])
-        
+        print("------(*)(*)(*)(*)game info (*)(*)(*)(*) ------------")
+        print(f"batter_df sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
         # Convert DataFrame to Parquet
         parquet_buffer = BytesIO()
         df.to_parquet(parquet_buffer)
@@ -347,3 +345,40 @@ async def create_or_update_game_internal(team_id: str, game_data: GameData, game
             detail=f"Error creating/updating game for team {team_id}: {str(e)}"
         )
 
+@router.get("/{team_id}/{game_id}/my_team_ha")
+async def get_inning_scorebook(team_id: int, game_id: int):
+    """
+    Get my_team_ha for a specific game
+    """
+    try:
+        con = get_duckdb_connection()
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        game_info_blob_name = f"games/team_{team_id}/game_{game_id}.parquet"
+        try:
+            query = f"""
+                SELECT                     
+                    LOWER(my_team_ha) AS my_team_ha
+                FROM read_parquet('azure://{CONTAINER_NAME}/{game_info_blob_name}')
+            """
+            my_team_ha_df = con.execute(query).fetchdf()
+            if my_team_ha_df.empty:
+                my_team_ha = "home"
+                return my_team_ha
+            else:
+                print("no game data found")
+                #I need to consistently format the string to 'home' or 'away' based upon the stored value.  
+                if my_team_ha_df.iloc[0]['my_team_ha'] == "home":
+                    print("returned home")
+                    return 'home'
+                else:
+                    print("returned away")
+                    return 'away'
+        except Exception as e:
+            logger.error(f"failure reading my_team_ha: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error getting my_team_ha for team {team_id}, game {game_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting my_team_ha for team {team_id}, game {game_id}: {str(e)}"
+        )
