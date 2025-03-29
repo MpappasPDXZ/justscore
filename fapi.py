@@ -1,15 +1,17 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
+from fastapi.encoders import jsonable_encoder
 import os
 from utils import *
 
 # Import routers instead of apps
-from teams import router as teams_router
 from games import router as games_router
+from teams import router as teams_router
 from lineup import router as lineup_router
 from scores import router as score_router
+from defense import router as defense_router
 
 app = FastAPI(
     title="FastAPI Team Management API",
@@ -53,6 +55,12 @@ app.include_router(
     score_router,
     prefix="/scores",
     tags=["scores"]
+)
+
+app.include_router(
+    defense_router,
+    prefix="/defense",
+    tags=["defense"]
 )
 
 @app.get("/", tags=["root"])

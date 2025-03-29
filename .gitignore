@@ -33,10 +33,15 @@ inning_gen.py
 inning_read.py
 parquet_reader.py
 read_specific_parquet.py
-
+test_defense_api.py
+read_defense_parquet.py
 
 # Virtual environment
 venv/
 
 # Environment variables and secrets
 *.env
+
+# Test scripts
+test_defense_format.py
+test_defense_api.py

@@ -32,6 +32,68 @@ class LineupItem(BaseModel):
 class LineupBatch(BaseModel):
     lineup: List[LineupItem]
 
+@router.get("/{team_id}/{game_id}/{team_choice}/maximum-inning")
+async def get_max_inning_number_lineup(team_id: str, game_id: str, team_choice: str):
+    """
+    Get the maximum inning number available for lineup data for a specific team, game, and team choice
+    """
+    try:
+        # Get blob service client to list available innings
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        prefix = f"games/team_{team_id}/game_{game_id}/lineup/{team_choice}_"
+        blobs = list(container_client.list_blobs(name_starts_with=prefix))
+        
+        if not blobs:
+            return {
+                "max_inning": 0,
+                "team_id": int(team_id),
+                "game_id": int(game_id),
+                "team_choice": team_choice,
+                "innings_available": False,
+                "message": "No innings found for this team, game, and team choice"
+            }
+        
+        # Extract inning numbers from blob names
+        inning_numbers = []
+        for blob in blobs:
+            blob_name = blob.name
+            inning_str = blob_name.replace(prefix, "").replace(".parquet", "")
+            try:
+                inning = int(inning_str)
+                inning_numbers.append(inning)
+            except ValueError:
+                continue
+        
+        if not inning_numbers:
+            return {
+                "max_inning": 0,
+                "team_id": int(team_id),
+                "game_id": int(game_id),
+                "team_choice": team_choice,
+                "innings_available": False,
+                "message": "No valid inning numbers found in blob names"
+            }
+        
+        max_inning = max(inning_numbers)
+        
+        return {
+            "max_inning": max_inning,
+            "team_id": int(team_id),
+            "game_id": int(game_id),
+            "team_choice": team_choice,
+            "innings_available": True,
+            "available_innings": sorted(inning_numbers),
+            "message": f"Maximum inning number is {max_inning}"
+        }
+    except Exception as e:
+        logger.error(f"Error getting maximum inning number for lineup team {team_id}, game {game_id}, team choice {team_choice}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting maximum inning number for lineup: {str(e)}"
+        )
+
 @router.get("/{team_id}/{game_id}/my")
 async def get_my_lineup(team_id: str, game_id: str):
     """
@@ -253,7 +315,6 @@ async def update_lineup_for_inning(team_id: str, game_id: str, team_choice: str,
                     status_code=400,
                     detail=f"Missing required field: {field}"
                 )
-        #let me push
         # Validate team_id and game_id match URL parameters
         for item in items:
             if str(item.team_id) != team_id or str(item.game_id) != game_id:
@@ -615,4 +676,92 @@ async def get_new_inning_lineup(team_id: str, game_id: str, team_choice: str, in
             "team_choice": team_choice,
             "source_inning": None,
             "lineup": []
-        } 
+        }
+
+@router.post("/{team_id}/{game_id}/{team_choice}/copy/{from_inning}/{to_inning}")
+async def copy_lineup_data(team_id: str, game_id: str, team_choice: str, from_inning: int, to_inning: int):
+    """
+    Copy lineup data from one inning to another for a specific team and game
+    """
+    try:
+        # Get blob service client
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        
+        # Construct the source and destination blob names
+        source_blob_name = f"games/team_{team_id}/game_{game_id}/lineup/{team_choice}_offense_{from_inning}.parquet"
+        destination_blob_name = f"games/team_{team_id}/game_{game_id}/lineup/{team_choice}_offense_{to_inning}.parquet"
+        
+        # Check if the source blob exists
+        source_blob_client = container_client.get_blob_client(source_blob_name)
+        source_exists = False
+        try:
+            source_blob_properties = source_blob_client.get_blob_properties()
+            source_exists = True
+        except Exception:
+            source_exists = False
+            
+        if not source_exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Source inning lineup data not found for team {team_id}, game {game_id}, team choice {team_choice}, inning {from_inning}"
+            )
+        
+        # Check if the destination already exists
+        destination_blob_client = container_client.get_blob_client(destination_blob_name)
+        destination_exists = False
+        try:
+            destination_blob_properties = destination_blob_client.get_blob_properties()
+            destination_exists = True
+        except Exception:
+            destination_exists = False
+        
+        # Get the data from the source blob
+        con = get_duckdb_connection()
+        query = f"""
+            SELECT 
+                CAST(team_id AS INTEGER) AS team_id,
+                CAST(game_id AS INTEGER) AS game_id,
+                home_or_away,
+                CAST(order_number AS INTEGER) AS order_number,
+                jersey_number,
+                player_name
+            FROM read_parquet('azure://{CONTAINER_NAME}/{source_blob_name}')
+        """
+        source_df = con.execute(query).fetchdf()
+        
+        if source_df.empty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source inning lineup data is empty for team {team_id}, game {game_id}, team choice {team_choice}, inning {from_inning}"
+            )
+        
+        # Update the inning number to the destination inning
+        source_df['inning_number'] = to_inning
+        
+        # Convert DataFrame to Parquet
+        parquet_buffer = BytesIO()
+        source_df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload to the destination blob
+        destination_blob_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": f"Lineup data copied successfully from inning {from_inning} to inning {to_inning}",
+            "team_id": int(team_id),
+            "game_id": int(game_id),
+            "team_choice": team_choice,
+            "from_inning": from_inning,
+            "to_inning": to_inning,
+            "lineup_count": len(source_df),
+            "overwritten": destination_exists
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error copying lineup data from inning {from_inning} to {to_inning} for team {team_id}, game {game_id}, team choice {team_choice}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error copying lineup data: {str(e)}"
+        ) 
