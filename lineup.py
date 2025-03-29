@@ -253,7 +253,7 @@ async def update_lineup_for_inning(team_id: str, game_id: str, team_choice: str,
                     status_code=400,
                     detail=f"Missing required field: {field}"
                 )
-        
+        #let me push
         # Validate team_id and game_id match URL parameters
         for item in items:
             if str(item.team_id) != team_id or str(item.game_id) != game_id:
