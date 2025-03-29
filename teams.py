@@ -10,6 +10,16 @@ class TeamMetadata(BaseModel):
     season: str
     session: str
     created_on: str  # format: 'mm-dd-yyyy'
+
+class TeamEditData(BaseModel):
+    team_name: Optional[str] = None
+    head_coach: Optional[str] = None
+    age: Optional[int] = None
+    season: Optional[str] = None
+    session: Optional[str] = None
+    created_on: Optional[str] = None  # format: 'mm-dd-yyyy'
+    team_id: Optional[int] = None
+
 # Define valid defensive positions
 DefensivePosition = Literal[
     'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH','DP', 'FL','SUB'
@@ -736,4 +746,70 @@ async def get_active_players(team_id: str):
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving active players for team {team_id}: {str(e)}"
+        )
+
+@router.post("/{team_id}/edit")
+async def edit_team(team_id: str, team_data: TeamEditData):
+    """
+    Edit an existing team with partial data updates
+    """
+    try:
+        # Verify the team exists
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+        metadata_blob_name = f"metadata/{team_id}.parquet"
+        metadata_client = container_client.get_blob_client(metadata_blob_name)
+        
+        # Check if metadata file exists
+        try:
+            metadata_properties = metadata_client.get_blob_properties()
+            blob_data = metadata_client.download_blob().readall()
+            parquet_file = BytesIO(blob_data)
+            existing_df = pd.read_parquet(parquet_file)
+            existing_data = existing_df.to_dict(orient='records')[0]
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team {team_id} not found: {str(e)}"
+            )
+        
+        # Update only the fields that are provided
+        data_dict = team_data.model_dump(exclude_unset=True)
+        
+        # Ensure team_id is preserved and is an integer
+        data_dict['team_id'] = int(team_id)
+        
+        # Merge with existing data
+        for key, value in data_dict.items():
+            if value is not None:  # Only update fields with non-None values
+                existing_data[key] = value
+                
+        # Convert to DataFrame
+        df = pd.DataFrame([existing_data])
+        
+        # Convert DataFrame to Parquet
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer)
+        parquet_buffer.seek(0)
+        
+        # Upload updated metadata
+        metadata_client.upload_blob(parquet_buffer.getvalue(), overwrite=True)
+        
+        return {
+            "message": f"Successfully edited team {team_id}",
+            "team_id": int(team_id),
+            "metadata_file": metadata_blob_name,
+            "team_data": existing_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error editing team {team_id}: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error editing team {team_id}: {str(e)}"
         )
