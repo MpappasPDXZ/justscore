@@ -764,4 +764,86 @@ async def copy_lineup_data(team_id: str, game_id: str, team_choice: str, from_in
         raise HTTPException(
             status_code=500,
             detail=f"Error copying lineup data: {str(e)}"
+        )
+
+@router.get("/games/{team_id}/{game_id}/{team_choice}/order_by_batter")
+async def get_batters_by_inning(team_id: str, game_id: str, team_choice: str):
+    """
+    Get batters organized by batting order with details about when they batted in each inning
+    """
+    try:
+        # Get DuckDB connection
+        con = get_duckdb_connection()
+        
+        # Construct the blob name pattern
+        blob_pattern = f"games/team_{team_id}/game_{game_id}/lineup/{team_choice}_offense_*.parquet"
+        
+        try:
+            # Query to read all innings and order by inning number
+            query = f"""
+                SELECT 
+                    home_or_away,
+                    order_number,
+                    inning_number,
+                    jersey_number,
+                    player_name
+                FROM read_parquet('azure://{CONTAINER_NAME}/{blob_pattern}', union_by_name=True)
+                WHERE order_number IS NOT NULL
+                ORDER BY order_number ASC, inning_number ASC
+            """
+            
+            result_df = con.execute(query).fetchdf()
+            
+            # If no data found
+            if result_df.empty:
+                return {
+                    "team_id": int(team_id),
+                    "game_id": int(game_id),
+                    "team_choice": team_choice,
+                    "batters_count": 0,
+                    "message": "No batting data found",
+                    "batting_order": {}
+                }
+            
+            # Organize data by order_number and then by inning_number
+            batting_order = {}
+            
+            # Group by order_number
+            order_groups = result_df.groupby('order_number')
+            
+            for order_number, group in order_groups:
+                order_num_int = int(order_number)
+                
+                # Initialize this order number in the result
+                if order_num_int not in batting_order:
+                    batting_order[order_num_int] = {}
+                
+                # Now organize by inning
+                for _, row in group.iterrows():
+                    inning_num_int = int(row['inning_number'])
+                    batting_order[order_num_int][inning_num_int] = {
+                        "jersey_number": row['jersey_number'],
+                        "player_name": row['player_name'],
+                        "display": f"{row['jersey_number']} - {row['player_name']}"
+                    }
+            
+            return {
+                "team_id": int(team_id),
+                "game_id": int(game_id),
+                "team_choice": team_choice,
+                "batting_order_count": len(batting_order),
+                "batting_order": batting_order
+            }
+            
+        except Exception as e:
+            logger.error(f"Error querying batting data: {str(e)}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Batting data not found or error retrieving data: {str(e)}"
+            )
+    except Exception as e:
+        logger.error(f"Error getting batters by inning for team {team_id}, game {game_id}, team choice {team_choice}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting batters by inning: {str(e)}"
         ) 

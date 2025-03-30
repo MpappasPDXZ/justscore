@@ -35,6 +35,7 @@ parquet_reader.py
 read_specific_parquet.py
 test_defense_api.py
 read_defense_parquet.py
+test_lineup_api.py
 
 # Virtual environment
 venv/
