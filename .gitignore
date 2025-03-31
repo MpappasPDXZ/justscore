@@ -36,6 +36,23 @@ read_specific_parquet.py
 test_defense_api.py
 read_defense_parquet.py
 test_lineup_api.py
+read_lineup_parquet.py
+test_scores_api.py
+list_azure_blobs.py
+check_parquet_files.py
+debug_pa_query.py
+app_log.txt
+run_tests.py
+save_scorecardgrid_json.py
+test_create_multiple_pa.py
+test_endpoints.py
+test_new_endpoints.py
+test_pa_edit_performance.py
+test_pa_edit.py
+test_new_endpoint.py
+test_scorecardgrid.py
+test_type_validation.py
+test_results/*
 
 # Virtual environment
 venv/
@@ -46,3 +63,9 @@ venv/
 # Test scripts
 test_defense_format.py
 test_defense_api.py
+read_away_parquet.py
+
+# Generated JSON files
+team_*_game_*_inning_*.json
+lineup_raw_*.json
+lineup_frontend_*.json

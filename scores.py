@@ -10,11 +10,85 @@ import numpy as np
 import json
 import logging
 import ast
+import time
 
 # Disable the verbose Azure Storage logging
 logging.getLogger('azure.core.pipeline.policies.http_logging_policy').setLevel(logging.ERROR)
 
 router = APIRouter()
+
+# Utility function to safely convert parameters to integers when possible
+def safe_int_conversion(value):
+    """
+    Safely convert a value to integer if it's a digit string.
+    Otherwise, return the original value.
+    """
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return value
+
+# Helper function to validate batting order structure
+def validate_batting_order(batting_order):
+    if not isinstance(batting_order, dict):
+        logger.warning("Batting order is not a dictionary")
+        return False
+    
+    for order_num, inning_data in batting_order.items():
+        if not isinstance(inning_data, dict):
+            logger.warning(f"Inning data for order {order_num} is not a dictionary")
+            return False
+        
+        for inning_num, player_data in inning_data.items():
+            if not isinstance(player_data, dict):
+                logger.warning(f"Player data for order {order_num}, inning {inning_num} is not a dictionary")
+                return False
+            
+            # Check required keys
+            for key in ['jersey_number', 'player_name', 'display']:
+                if key not in player_data:
+                    logger.warning(f"Missing required key '{key}' in player data for order {order_num}, inning {inning_num}")
+                    return False
+    
+    return True
+
+# Helper function to validate plate appearances structure
+def validate_plate_appearances(plate_appearances):
+    if not isinstance(plate_appearances, dict):
+        logger.warning("Plate appearances is not a dictionary")
+        return False
+    
+    for inning_num, inning_data in plate_appearances.items():
+        if not isinstance(inning_data, dict) or 'rounds' not in inning_data:
+            logger.warning(f"Invalid inning data for inning {inning_num}")
+            return False
+        
+        rounds = inning_data.get('rounds', {})
+        if not isinstance(rounds, dict):
+            logger.warning(f"Rounds for inning {inning_num} is not a dictionary")
+            return False
+        
+        for round_id, round_data in rounds.items():
+            if not isinstance(round_data, dict):
+                logger.warning(f"Round data for inning {inning_num}, round {round_id} is not a dictionary")
+                return False
+            
+            if 'order_number' not in round_data or 'details' not in round_data:
+                logger.warning(f"Missing required keys in round data for inning {inning_num}, round {round_id}")
+                return False
+            
+            details = round_data.get('details', {})
+            if not isinstance(details, dict):
+                logger.warning(f"Details for inning {inning_num}, round {round_id} is not a dictionary")
+                return False
+            
+            # Check minimum required keys for details
+            # The full model would have many more fields, but we'll check a few critical ones
+            for key in ['inning_number', 'order_number', 'pa_round', 'batter_seq_id']:
+                if key not in details:
+                    logger.warning(f"Missing required key '{key}' in details for inning {inning_num}, round {round_id}")
+                    # Don't return False here as some fields might be optional
+    
+    return True
 
 class ScoreData(BaseModel):
     gameId: int
@@ -138,15 +212,15 @@ class PlateAppearanceData(BaseModel):
                 
         return result
 ###########################################################
-# DELETE PLATE APPEARANCE
+#0 -  DELETE PLATE APPEARANCE
 ########################################################### 
 @router.delete("/api/plate-appearance/{team_id}/{game_id}/{inning_number}/{team_choice}/{batter_seq_id}")
 async def delete_plate_appearance(
     team_id: str,
     game_id: str, 
-    inning_number: int,
+    inning_number: str,
     team_choice: str,
-    batter_seq_id: int
+    batter_seq_id: str
 ):
     try:
         # Validate team_choice
@@ -155,8 +229,15 @@ async def delete_plate_appearance(
                 status_code=400,
                 detail="team_choice must be 'home' or 'away'"
             )
+        
+        # Convert team_id, game_id, inning_number, and batter_seq_id to integers if possible
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        inning_number_val = safe_int_conversion(inning_number)
+        batter_seq_id_val = safe_int_conversion(batter_seq_id)
+        
         # Create the blob path
-        blob_name = f"games/team_{team_id}/game_{game_id}/inning_{inning_number}/{team_choice}_{batter_seq_id}.parquet"
+        blob_name = f"games/team_{team_id}/game_{game_id}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet"
         # Get blob service client
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
@@ -188,6 +269,12 @@ async def delete_plate_appearance(
 #I wan to apply the pa_model to the data
 async def save_plate_appearance(pa_data: dict = Body(...)):
     try:
+        # Convert any string IDs to integers where appropriate
+        if isinstance(pa_data, dict):
+            for key in ['team_id', 'game_id', 'batter_seq_id', 'teamId', 'gameId']:
+                if key in pa_data and isinstance(pa_data[key], str):
+                    pa_data[key] = safe_int_conversion(pa_data[key])
+        
         # Validate data using PlateAppearanceData model
         try:
             pa_model = PlateAppearanceData(**pa_data)
@@ -215,10 +302,10 @@ async def save_plate_appearance(pa_data: dict = Body(...)):
         blob_client = container_client.get_blob_client(blob_name)
         blob_client.upload_blob(parquet_buffer, overwrite=True)
 
-        print("------1A - SAVE PA DF (*) ------------")
-        print(f"calculate inning score batters_dfcolumns: {list(df.columns)}")
-        print(f"First row sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
-        print("----------------------------------------------")
+        #print("------1A - SAVE PA DF (*) ------------")
+        #print(f"calculate inning score batters_dfcolumns: {list(df.columns)}")
+        #print(f"First row sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
+        #print("----------------------------------------------")
         
         return {
             "status": "success",
@@ -242,17 +329,23 @@ async def save_plate_appearance(pa_data: dict = Body(...)):
 # 2 - calculate the inning score
 ###########################################################
 @router.post("/{team_id}/{game_id}/{inning_number}/{team_choice}/calculate-score")
-async def calculate_score(team_id: str, game_id: str, inning_number: int, team_choice: str):
+async def calculate_score(team_id: str, game_id: str, inning_number: str, team_choice: str):
     try:
         if team_choice not in ['home', 'away']:
             raise HTTPException(
                 status_code=400,
                 detail="team_choice must be 'home' or 'away'"
             )
+        
+        # Convert team_id, game_id, and inning_number to integers if possible using utility function  
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        inning_number_val = safe_int_conversion(inning_number)
+        
         con = get_duckdb_connection()
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-        plate_appearance_blob_name = f"games/team_{team_id}/game_{game_id}/inning_{inning_number}/{team_choice}_*.parquet"    
+        plate_appearance_blob_name = f"games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet"    
         # Continue with your existing logic for valid data
         batters_df = pd.DataFrame()
         try:
@@ -303,10 +396,10 @@ async def calculate_score(team_id: str, game_id: str, inning_number: int, team_c
             """
             batters_df = con.execute(aggregate_query).fetchdf()
                 
-            print("------2 - CALCULATE-INNING-SCORE (*) ------------")
-            print(f"calculate inning score batters_df columns: {list(batters_df.columns)}")
-            print(f"First row sample: {batters_df.iloc[0].to_dict() if not batters_df.empty else 'No data'}")
-            print("----------------------------------------------")
+            #print("------2 - CALCULATE-INNING-SCORE (*) ------------")
+            #print(f"calculate inning score batters_df columns: {list(batters_df.columns)}")
+            #print(f"First row sample: {batters_df.iloc[0].to_dict() if not batters_df.empty else 'No data'}")
+            #print("----------------------------------------------")
             
             if batters_df.empty:
                 print("ERROR: Source DataFrame is empty - no data in parquet files")
@@ -372,10 +465,14 @@ async def get_game_summary(team_id: str, game_id: str):
     try:
         con = get_duckdb_connection()
         
+        # Convert team_id and game_id to integers if possible using utility function
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        
         # Initialize default response structure with blanks
         response = {
             "game_header": {
-                "user_team": team_id, 
+                "user_team": team_id_val, 
                 "coach": "Unknown", 
                 "opponent_name": "Unknown",
                 "event_date": "", 
@@ -387,7 +484,7 @@ async def get_game_summary(team_id: str, game_id: str):
                 "field_temperature": 0,
                 "game_status": "open",
                 "my_team_ha": "home",
-                "game_id": game_id
+                "game_id": game_id_val
             },
             "innings": {str(i): {
                 "home": {"runs": 0, "strike_percent": 0, "hard_hit": 0, "hits": 0, "outs": 0, "errors": 0, "walks": 0, "strikeouts": 0, "on_first_base": 0, "on_second_base": 0, "on_third_base": 0},
@@ -425,6 +522,10 @@ async def get_game_summary(team_id: str, game_id: str):
                 response["game_header"] = game_header_df.iloc[0].to_dict()
                 game_header_populated = True
                 logger.info(f"Game header populated for team {team_id}, game {game_id}")
+                
+                # Convert field_temperature to integer
+                if "field_temperature" in response["game_header"]:
+                    response["game_header"]["field_temperature"] = safe_int_conversion(response["game_header"]["field_temperature"])
         except Exception as e:
             logger.warning(f"Error getting game header: {str(e)}")
         
@@ -468,13 +569,10 @@ async def get_game_summary(team_id: str, game_id: str):
                             if stat in row:
                                 response["innings"][inning_str][team][stat] = int(row[stat])
                         # Add stats to totals
-                        for stat in ['runs', 'hits', 'errors', 'walks', 'strikeouts']:
+                        for stat in ['runs', 'hits', 'walks', 'strikeouts', 'errors']:
                             if stat in row:
                                 totals[team][stat] += int(row[stat])
-                        # Store errors and strike_percent for swapping
-                        if 'errors' in row:
-                            response["innings"][inning_str][team]['errors'] = int(row['errors'])
-                            totals[team]['errors'] += int(row['errors'])
+                        # Store strike_percent for swapping
                         if 'strike_percent' in row:
                             response["innings"][inning_str][team]['strike_percent'] = int(row['strike_percent'])
                 
@@ -531,10 +629,12 @@ async def get_game_summary(team_id: str, game_id: str):
         return response
 
 ###########################################################
-# 4 - get the inning scorebook by attempt (this is the big data grid)
+# 4 - get the inning scorebook by attempt (this is the big data grid) OLD
 ###########################################################
+# need to deprecate this!
 @router.get("/{team_id}/{game_id}/{inning_number}/{team_choice}/{my_team_ha}")
-async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, team_choice: str, my_team_ha: str):
+# need to deprecate this!
+async def get_inning_scorebook(team_id: str, game_id: str, inning_number: str, team_choice: str, my_team_ha: str):
     """
     Get detailed scorebook-style data for a specific inning, joining batting results with lineup information
     """
@@ -549,13 +649,19 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
         game_info_blob_name = f"games/team_{team_id}/game_{game_id}.parquet"
+        
+        # Convert team_id, game_id, and inning_number to integers if possible using utility function
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        inning_number_val = safe_int_conversion(inning_number)
+        
         # I need this to find the file for the lineup name
         if (my_team_ha == "home" and team_choice == "home") or (my_team_ha == "away" and team_choice == "away"):
             team_data_key = 'm'
         else:
             team_data_key = 'o'
         # Get lineup info with duckdb
-        lineup_info_blob_name = f"games/team_{team_id}/game_{game_id}/{team_data_key}_lineup.parquet"
+        lineup_info_blob_name = f"games/team_{team_id_val}/game_{game_id_val}/{team_data_key}_lineup.parquet"
         try:
             query = f"""
                 SELECT                     
@@ -582,15 +688,21 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
         #--------------------------------
         # Step 3: Get at bat data from the new file structure
         #--------------------------------
-        pa_info_blob_name = f"games/team_{team_id}/game_{game_id}/inning_{inning_number}/{team_choice}_*.parquet"
         batter_df = pd.DataFrame()  # Initialize empty DataFrame
         try:
-            query = f"""
-                SELECT * 
-                FROM read_parquet('azure://{CONTAINER_NAME}/{pa_info_blob_name}', union_by_name=True)
-                ORDER BY batter_seq_id
+            # Use a query that uses batter_seq_id directly as pa_round
+            pa_query = f"""
+                SELECT 
+                    inning_number,
+                    order_number,
+                    batter_seq_id, 
+                    *
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
             """
-            batter_df = con.execute(query).fetchdf()
+            
+            print(f"DEBUG: Running PA query: {pa_query}")
+            
+            batter_df = con.execute(pa_query).fetchdf()
         except Exception as e:
             # Log the error but don't raise an exception
             logger.warning(f"Reading plate appearance info: {str(e)}")
@@ -598,9 +710,9 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
                 print("no valid at bat data found")
                 # Return empty scorebook entries instead of an error
                 return {
-                    "team_id": team_id,
-                    "game_id": game_id,
-                    "inning_number": inning_number,
+                    "team_id": team_id_val,
+                    "game_id": game_id_val,
+                    "inning_number": inning_number_val,
                     "team_choice": team_choice,
                     "my_team_ha": my_team_ha,
                     "lineup_available": lineup_available,
@@ -707,14 +819,19 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
                     # Just use a default position if hit_to isn't available
                     record['pa_error_on'] = ['6']  # Default to shortstop
             
+            # Make sure these key fields are explicitly included 
+            record['inning_number'] = int(row['inning_number'])
+            record['order_number'] = int(row['order_number'])
+            record['pa_round'] = int(row['batter_seq_id'])
+            
             records.append(record)
             
         scorebook_entries = records
         
-        print("------3b - scorebook-DF-RETRIEVAL ------------")
-        print(f"batter_df columns: {list(batter_df.columns)}")
-        print(f"batter_df sample: {batter_df.iloc[0].to_dict() if not batter_df.empty else 'No data'}")
-        print("----------------------------------------------")
+        #print("------3b - scorebook-DF-RETRIEVAL ------------")
+        #print(f"batter_df columns: {list(batter_df.columns)}")
+        #print(f"batter_df sample: {batter_df.iloc[0].to_dict() if not batter_df.empty else 'No data'}")
+        #print("----------------------------------------------")
         
         response = {
             "team_id": team_id,
@@ -727,33 +844,81 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
             "scorebook_entries": scorebook_entries
         }
         
-        # Final check - make sure all array fields are properly formatted (without logging)
-        for entry in response["scorebook_entries"]:
-            for field in array_fields:
-                if field in entry:
-                    # If not a list, convert to a list
-                    if not isinstance(entry[field], list):
-                        entry[field] = [] if entry[field] is None else [entry[field]]
-                    
-                    # Ensure all items in the list are integers with proper range constraints
-                    if field in ["pa_error_on", "br_error_on"]:
-                        # Baseball positions (0-9)
-                        entry[field] = [
-                            int(item) if (isinstance(item, (int, float)) or (isinstance(item, str) and item.isdigit())) and 0 <= int(item) <= 9
-                            else item 
-                            for item in entry[field]
-                        ]
-                        # Filter out invalid values
-                        entry[field] = [item for item in entry[field] if isinstance(item, int) and 0 <= item <= 9]
-                    elif field in ["br_stolen_bases", "base_running_hit_around"]:
-                        # Base numbers (0-4)
-                        entry[field] = [
-                            int(item) if (isinstance(item, (int, float)) or (isinstance(item, str) and item.isdigit())) and 0 <= int(item) <= 4
-                            else item 
-                            for item in entry[field]
-                        ]
-                        # Filter out invalid values
-                        entry[field] = [item for item in entry[field] if isinstance(item, int) and 0 <= item <= 4]
+        # Process array fields in plate appearances
+        if lineup_available == "yes" and isinstance(lineup_entries, dict):
+            array_fields = ["pa_error_on", "br_error_on", "br_stolen_bases", "base_running_hit_around"]
+            for inning_num, inning_data in lineup_entries.items():
+                if isinstance(inning_data, dict) and 'rounds' in inning_data:
+                    rounds = inning_data.get('rounds', {})
+                    for round_id, round_data in rounds.items():
+                        if isinstance(round_data, dict) and 'details' in round_data:
+                            details = round_data['details']
+                            for field in array_fields:
+                                if field in details:
+                                    # Process the array field
+                                    field_value = details[field]
+                                    
+                                    # If not a list, convert to a list
+                                    if not isinstance(field_value, list):
+                                        if field_value is None or field_value == "":
+                                            field_value = []
+                                        else:
+                                            # Try to convert string representations to list
+                                            if isinstance(field_value, str):
+                                                if field_value.startswith('[') and field_value.endswith(']'):
+                                                    try:
+                                                        import ast
+                                                        field_value = ast.literal_eval(field_value)
+                                                    except (SyntaxError, ValueError):
+                                                        # If parsing fails, treat as a single item
+                                                        field_value = [field_value]
+                                                    else:
+                                                        field_value = [field_value]
+                                                else:
+                                                    field_value = [field_value]
+                                            else:
+                                                field_value = [field_value]
+                                    
+                                    # Process each item in the list to ensure it's a properly typed integer
+                                    if field in ["pa_error_on", "br_error_on"]:
+                                        # Baseball positions (0-9)
+                                        processed_items = []
+                                        for item in field_value:
+                                            try:
+                                                if isinstance(item, (int, float)) and not pd.isna(item):
+                                                    val = int(item)
+                                                    if 0 <= val <= 9:
+                                                        processed_items.append(val)
+                                                elif isinstance(item, str) and item.isdigit():
+                                                    val = int(item)
+                                                    if 0 <= val <= 9:
+                                                        processed_items.append(val)
+                                            except (ValueError, TypeError):
+                                                pass
+                                        details[field] = processed_items
+                                    elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                                        # Base numbers (0-4)
+                                        processed_items = []
+                                        for item in field_value:
+                                            try:
+                                                if isinstance(item, (int, float)) and not pd.isna(item):
+                                                    val = int(item)
+                                                    if 0 <= val <= 4:
+                                                        processed_items.append(val)
+                                                elif isinstance(item, str) and item.isdigit():
+                                                    val = int(item)
+                                                    if 0 <= val <= 4:
+                                                        processed_items.append(val)
+                                            except (ValueError, TypeError):
+                                                pass
+                                        details[field] = processed_items
+        
+        # Validate the data before returning
+        if lineup_available:
+            if not validate_batting_order(lineup_entries):
+                logger.warning("Invalid batting order structure, setting lineup_available to 'no'")
+                response["lineup_available"] = False
+                response["lineup_entries"] = {}
         
         return response
         
@@ -768,3 +933,1006 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: int, t
             status_code=500,
             detail=f"Error getting inning scorebook: {str(e)}"
         )
+###########################################################
+# 5 - get the inning scorebook by home_or_away (team_choice), inning_number, round_number, and then supply the statistics of the plate appearance
+###########################################################
+@router.get("/{team_id}/{game_id}/{team_choice}/scorecardgrid")
+async def get_inning_scorecardgrid(team_id: str, game_id: str, team_choice: str):
+    """
+    Get detailed scorecardgrid-style data for all innings for a specific team,
+    including both lineup data and plate appearance data
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+    except Exception as e:
+        logger.error(f"Error in get_inning_scorecardgrid: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+        # Initialize DuckDB connection and get blob service client
+    con = get_duckdb_connection()
+    blob_service_client = get_blob_service_client()
+    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+    # Convert team_id and game_id to integers if possible using utility function
+    team_id_val = safe_int_conversion(team_id)
+    game_id_val = safe_int_conversion(game_id)
+    
+    ###########################################################
+    # First build the lineup JSON
+    ###########################################################
+    try:
+            lineup_query = f"""
+                WITH lineup_data AS (
+                    SELECT 
+                        CAST(order_number AS INTEGER) AS order_num,  -- Ensure numeric ordering
+                        CAST(inning_number AS INTEGER) AS inning_num,
+                        order_number, 
+                        inning_number,
+                        jersey_number,
+                        player_name,
+                        jersey_number || ' - ' || player_name AS display
+                    FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/lineup/{team_choice}_offense_*.parquet', union_by_name=true)
+                    ORDER BY order_num, inning_num  -- Sort numerically
+                ),
+                -- For each order_number, create a JSON object with inning data
+                inning_objects AS (
+                    SELECT
+                        order_num,
+                        order_number,
+                        -- Use string_agg to ensure ordering
+                        '{{' || string_agg(
+                            '"' || inning_number || '": ' || 
+                            json_object(
+                                'jersey_number', jersey_number,
+                                'player_name', player_name,
+                                'display', display
+                            ),
+                            ', ' ORDER BY inning_num
+                        ) || '}}' AS inning_data
+                    FROM lineup_data
+                    GROUP BY order_num, order_number
+                    ORDER BY order_num
+                ),
+                -- Aggregate all order numbers into a single JSON object
+                batting_order_json AS (
+                    SELECT
+                        '{{' || string_agg(
+                            '"' || order_number || '": ' || inning_data,
+                            ', ' ORDER BY order_num
+                        ) || '}}' AS batting_order
+                    FROM inning_objects
+                )
+                SELECT batting_order FROM batting_order_json
+            """
+            result = con.execute(lineup_query).fetchone()
+            if result is None or len(result) == 0:
+                print("no lineup data found")
+                lineup_available = "no"
+                lineup_entries = {}
+            else:
+                print("lineup data found")
+                lineup_available = "yes"
+                # Parse the JSON string into a Python dict
+                try:
+                    lineup_entries = json.loads(result[0])
+                except (json.JSONDecodeError, TypeError, IndexError):
+                    print("error parsing lineup JSON")
+                    lineup_available = "no"
+                    lineup_entries = {}
+    except Exception as e:
+            logger.error(f"Error reading lineup info: {str(e)}")
+            lineup_available = "no"
+            lineup_entries = {}
+            
+            # Return early on lineup error
+            response = {
+                "team_id": team_id_val,
+                "game_id": game_id_val,
+                "team_choice": team_choice,
+                "lineup_available": "no",
+                "batting_order": {},
+                "pa_available": "no",
+                "plate_appearances": {},
+            }
+            return response
+    ###########################################################
+    # Second build the plate appearance JSON
+    ###########################################################
+    try:
+            pa_duckdb_query = f"""
+                WITH pa_with_round AS (
+                    SELECT 
+                        *,
+                        -- Calculate pa_round for each order_number within each inning
+                        ROW_NUMBER() OVER (
+                            PARTITION BY inning_number, order_number 
+                            ORDER BY batter_seq_id
+                        ) AS pa_round
+                    FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/inning_*/{team_choice}_*.parquet',union_by_name=true)
+                ),
+                -- Organize plate appearances by inning and round
+                inning_data AS (
+                    SELECT
+                        inning_number,
+                        batter_seq_id AS round_id,
+                        order_number,
+                        pa_round,
+                        json_object(
+                            'inning_number', inning_number,
+                            'order_number', order_number,
+                            'pa_round', pa_round,
+                            'batter_seq_id', batter_seq_id,
+                            'pa_why', pa_why,
+                            'pa_result', pa_result,
+                            'hit_to', hit_to,
+                            'out', out,
+                            'out_at', out_at,
+                            'balls_before_play', balls_before_play,
+                            'strikes_before_play', strikes_before_play,
+                            'pitch_count', pitch_count,
+                            'strikes_unsure', strikes_unsure,
+                            'strikes_watching', strikes_watching,
+                            'strikes_swinging', strikes_swinging,
+                            'ball_swinging', ball_swinging,
+                            'fouls', fouls,
+                            'hard_hit', hard_hit,
+                            'late_swings', late_swings,
+                            'slap', slap,
+                            'qab', qab,
+                            'rbi', rbi,
+                            'br_result', br_result,
+                            'wild_pitch', wild_pitch,
+                            'passed_ball', passed_ball,
+                            'sac', sac,
+                            'br_stolen_bases', br_stolen_bases,
+                            'base_running_hit_around', base_running_hit_around,
+                            'pa_error_on', pa_error_on,
+                            'br_error_on', br_error_on
+                        ) AS details
+                    FROM pa_with_round
+                ),
+                -- Group plate appearances by inning
+                rounds_by_inning AS (
+                    SELECT
+                        inning_number,
+                        '{{"rounds": {{' || string_agg(
+                            '"' || round_id || '": {{' ||
+                            '"order_number": ' || order_number || ',' ||
+                            '"details": ' || details ||
+                            '}}', 
+                            ', ' ORDER BY round_id
+                        ) || '}}}}' AS rounds_json
+                    FROM inning_data
+                    GROUP BY inning_number
+                    ORDER BY inning_number
+                ),
+                -- Create final JSON with all innings
+                plate_appearances_json AS (
+                    SELECT
+                        '{{' || string_agg(
+                            '"' || inning_number || '": ' || rounds_json,
+                            ', ' ORDER BY inning_number
+                        ) || '}}' AS plate_appearances
+                    FROM rounds_by_inning
+                )
+                SELECT plate_appearances FROM plate_appearances_json
+            """
+            pa_entries = con.execute(pa_duckdb_query).fetchone()
+            if pa_entries is None or len(pa_entries) == 0:
+                print("no plate appearance data found")
+                pa_available = "no"
+                pa_entries = {}
+            else:
+                print("plate appearance data found")
+                pa_available = "yes"
+                # Parse the JSON string into a Python dict
+                try:
+                    pa_entries = json.loads(pa_entries[0])
+                except (json.JSONDecodeError, IndexError, TypeError):
+                    print("error parsing plate appearance JSON")
+                    pa_available = "no"
+                    pa_entries = {}
+    except Exception as e:
+        logger.error(f"Error reading plate appearance info: {str(e)}")
+        pa_available = "no"
+        pa_entries = {}
+    ###########################################################
+    # Third structure the full response
+    ###########################################################
+    response = {
+        "team_id": team_id_val,
+        "game_id": game_id_val,
+        "team_choice": team_choice,
+        "lineup_available": lineup_available,
+        "batting_order": lineup_entries,
+        "pa_available": pa_available,
+        "plate_appearances": pa_entries
+    }
+    
+    # Process array fields in plate appearances
+    if pa_available == "yes" and isinstance(pa_entries, dict):
+        array_fields = ["pa_error_on", "br_error_on", "br_stolen_bases", "base_running_hit_around"]
+        for inning_num, inning_data in pa_entries.items():
+            if isinstance(inning_data, dict) and 'rounds' in inning_data:
+                rounds = inning_data.get('rounds', {})
+                for round_id, round_data in rounds.items():
+                    if isinstance(round_data, dict) and 'details' in round_data:
+                        details = round_data['details']
+                        for field in array_fields:
+                            if field in details:
+                                # Process the array field
+                                field_value = details[field]
+                                
+                                # If not a list, convert to a list
+                                if not isinstance(field_value, list):
+                                    if field_value is None or field_value == "":
+                                        field_value = []
+                                    else:
+                                        # Try to convert string representations to list
+                                        if isinstance(field_value, str):
+                                            if field_value.startswith('[') and field_value.endswith(']'):
+                                                try:
+                                                    import ast
+                                                    field_value = ast.literal_eval(field_value)
+                                                except (SyntaxError, ValueError):
+                                                    # If parsing fails, treat as a single item
+                                                    field_value = [field_value]
+                                                else:
+                                                    field_value = [field_value]
+                                            else:
+                                                field_value = [field_value]
+                                        else:
+                                            field_value = [field_value]
+                                
+                                # Process each item in the list to ensure it's a properly typed integer
+                                if field in ["pa_error_on", "br_error_on"]:
+                                    # Baseball positions (0-9)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+                                elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                                    # Base numbers (0-4)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+    
+    # Validate the data before returning
+    if lineup_available == "yes":
+        if not validate_batting_order(lineup_entries):
+            logger.warning("Invalid batting order structure, setting lineup_available to 'no'")
+            response["lineup_available"] = "no"
+            response["batting_order"] = {}
+    
+    if pa_available == "yes":
+        if not validate_plate_appearances(pa_entries):
+            logger.warning("Invalid plate appearances structure, setting pa_available to 'no'")
+            response["pa_available"] = "no"
+            response["plate_appearances"] = {}
+    
+    return response
+    
+###########################################################
+# 6 - get only the plate appearance data (faster version)
+###########################################################
+@router.get("/{team_id}/{game_id}/{team_choice}/scorecardgrid_paonly")
+async def get_inning_scorecardgrid_paonly(team_id: str, game_id: str, team_choice: str):
+    """
+    Get only plate appearance data for all innings for a specific team.
+    This is an optimized version that doesn't include lineup data.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+    except Exception as e:
+        logger.error(f"Error in get_inning_scorecardgrid_paonly: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+        
+    # Initialize DuckDB connection and get blob service client
+    con = get_duckdb_connection()
+    blob_service_client = get_blob_service_client()
+    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+    
+    # Convert team_id and game_id to integers if possible using utility function
+    team_id_val = safe_int_conversion(team_id)
+    game_id_val = safe_int_conversion(game_id)
+    
+    ###########################################################
+    # Get plate appearance data
+    ###########################################################
+    try:
+        pa_duckdb_query = f"""
+            WITH pa_with_round AS (
+                SELECT 
+                    *,
+                    -- Calculate pa_round for each order_number within each inning
+                    ROW_NUMBER() OVER (
+                        PARTITION BY inning_number, order_number 
+                        ORDER BY batter_seq_id
+                    ) AS pa_round
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/inning_*/{team_choice}_*.parquet',union_by_name=true)
+            ),
+            -- Organize plate appearances by inning and round
+            inning_data AS (
+                SELECT
+                    inning_number,
+                    batter_seq_id AS round_id,
+                    order_number,
+                    pa_round,
+                    json_object(
+                           'inning_number', inning_number,
+                            'order_number', order_number,
+                            'pa_round', pa_round,
+                            'batter_seq_id', batter_seq_id,
+                            'pa_why', pa_why,
+                            'pa_result', pa_result,
+                            'hit_to', hit_to,
+                            'out', out,
+                            'out_at', out_at,
+                            'balls_before_play', balls_before_play,
+                            'strikes_before_play', strikes_before_play,
+                            'pitch_count', pitch_count,
+                            'strikes_unsure', strikes_unsure,
+                            'strikes_watching', strikes_watching,
+                            'strikes_swinging', strikes_swinging,
+                            'ball_swinging', ball_swinging,
+                            'fouls', fouls,
+                            'hard_hit', hard_hit,
+                            'late_swings', late_swings,
+                            'slap', slap,
+                            'qab', qab,
+                            'rbi', rbi,
+                            'br_result', br_result,
+                            'wild_pitch', wild_pitch,
+                            'passed_ball', passed_ball,
+                            'sac', sac,
+                            'br_stolen_bases', br_stolen_bases,
+                            'base_running_hit_around', base_running_hit_around,
+                            'pa_error_on', pa_error_on,
+                            'br_error_on', br_error_on
+                    ) AS details
+                FROM pa_with_round
+            ),
+            -- Group plate appearances by inning
+            rounds_by_inning AS (
+                SELECT
+                    inning_number,
+                    '{{"rounds": {{' || string_agg(
+                        '"' || round_id || '": {{' ||
+                        '"order_number": ' || order_number || ',' ||
+                        '"details": ' || details ||
+                        '}}', 
+                        ', ' ORDER BY round_id
+                    ) || '}}}}' AS rounds_json
+                FROM inning_data
+                GROUP BY inning_number
+                ORDER BY inning_number
+            ),
+            -- Create final JSON with all innings
+            plate_appearances_json AS (
+                SELECT
+                    '{{' || string_agg(
+                        '"' || inning_number || '": ' || rounds_json,
+                        ', ' ORDER BY inning_number
+                    ) || '}}' AS plate_appearances
+                FROM rounds_by_inning
+            )
+            SELECT plate_appearances FROM plate_appearances_json
+        """
+        start_time = time.time()
+        pa_entries = con.execute(pa_duckdb_query).fetchone()
+        query_time = time.time() - start_time
+        logger.info(f"PA query execution time: {query_time:.3f} seconds")
+        
+        if pa_entries is None or len(pa_entries) == 0:
+            print("no plate appearance data found")
+            pa_available = "no"
+            pa_entries = {}
+        else:
+            print("plate appearance data found")
+            pa_available = "yes"
+            # Parse the JSON string into a Python dict
+            try:
+                pa_entries = json.loads(pa_entries[0])
+            except (json.JSONDecodeError, IndexError, TypeError):
+                print("error parsing plate appearance JSON")
+                pa_available = "no"
+                pa_entries = {}
+    except Exception as e:
+        logger.error(f"Error reading plate appearance info: {str(e)}")
+        pa_available = "no"
+        pa_entries = {}
+    
+    ###########################################################
+    # Structure the response
+    ###########################################################
+    response = {
+        "team_id": team_id_val,
+        "game_id": game_id_val,
+        "team_choice": team_choice,
+        "pa_available": pa_available,
+        "plate_appearances": pa_entries
+    }
+    
+    # Process array fields in plate appearances
+    start_time = time.time()
+    if pa_available == "yes" and isinstance(pa_entries, dict):
+        array_fields = ["pa_error_on", "br_error_on", "br_stolen_bases", "base_running_hit_around"]
+        for inning_num, inning_data in pa_entries.items():
+            if isinstance(inning_data, dict) and 'rounds' in inning_data:
+                rounds = inning_data.get('rounds', {})
+                for round_id, round_data in rounds.items():
+                    if isinstance(round_data, dict) and 'details' in round_data:
+                        details = round_data['details']
+                        for field in array_fields:
+                            if field in details:
+                                # Process the array field
+                                field_value = details[field]
+                                
+                                # If not a list, convert to a list
+                                if not isinstance(field_value, list):
+                                    if field_value is None or field_value == "":
+                                        field_value = []
+                                    else:
+                                        # Try to convert string representations to list
+                                        if isinstance(field_value, str):
+                                            if field_value.startswith('[') and field_value.endswith(']'):
+                                                try:
+                                                    import ast
+                                                    field_value = ast.literal_eval(field_value)
+                                                except (SyntaxError, ValueError):
+                                                    # If parsing fails, treat as a single item
+                                                    field_value = [field_value]
+                                                else:
+                                                    field_value = [field_value]
+                                            else:
+                                                field_value = [field_value]
+                                        else:
+                                            field_value = [field_value]
+                                
+                                # Process each item in the list to ensure it's a properly typed integer
+                                if field in ["pa_error_on", "br_error_on"]:
+                                    # Baseball positions (0-9)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+                                elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                                    # Base numbers (0-4)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+    processing_time = time.time() - start_time
+    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
+    
+    # Validate the data before returning
+    start_time = time.time()
+    if pa_available == "yes":
+        if not validate_plate_appearances(pa_entries):
+            logger.warning("Invalid plate appearances structure, setting pa_available to 'no'")
+            response["pa_available"] = "no"
+            response["plate_appearances"] = {}
+    validation_time = time.time() - start_time
+    logger.info(f"Validation time: {validation_time:.3f} seconds")
+    
+    return response
+    
+###########################################################
+# 7 - Get plate appearance data for a specific inning only - NEW VERSION
+###########################################################
+@router.get("/new/{team_id}/{game_id}/{team_choice}/{inning_number}/scorecardgrid_paonly_inningonly")
+async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: str, team_choice: str, inning_number: str):
+    """
+    Get only plate appearance data for a specific inning for a team.
+    This is a new version with a different URL path.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+    except Exception as e:
+        logger.error(f"Error in get_inning_scorecardgrid_paonly_by_inning_new: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+        
+    # Initialize DuckDB connection and get blob service client
+    con = get_duckdb_connection()
+    blob_service_client = get_blob_service_client()
+    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+    
+    # Convert team_id, game_id, and inning_number to integers if possible using utility function
+    team_id_val = safe_int_conversion(team_id)
+    game_id_val = safe_int_conversion(game_id)
+    inning_number_val = safe_int_conversion(inning_number)
+    
+    ###########################################################
+    # Get plate appearance data for specific inning
+    ###########################################################
+    try:
+        pa_duckdb_query = f"""
+            WITH pa_with_round AS (
+                SELECT 
+                    *,
+                    -- Calculate pa_round for each order_number within each inning
+                    ROW_NUMBER() OVER (
+                        PARTITION BY inning_number, order_number 
+                        ORDER BY batter_seq_id
+                    ) AS pa_round
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/inning_{inning_number_val}/{team_choice}_*.parquet')
+                WHERE home_or_away = '{team_choice}' AND inning_number = {inning_number_val}
+            ),
+            -- Organize plate appearances by inning and round
+            inning_data AS (
+                SELECT
+                    inning_number,
+                    batter_seq_id AS round_id,
+                    order_number,
+                    pa_round,
+                    json_object(
+                           'inning_number', inning_number,
+                            'order_number', order_number,
+                            'pa_round', pa_round,
+                            'batter_seq_id', batter_seq_id,
+                            'pa_why', pa_why,
+                            'pa_result', pa_result,
+                            'hit_to', hit_to,
+                            'out', out,
+                            'out_at', out_at,
+                            'balls_before_play', balls_before_play,
+                            'strikes_before_play', strikes_before_play,
+                            'pitch_count', pitch_count,
+                            'strikes_unsure', strikes_unsure,
+                            'strikes_watching', strikes_watching,
+                            'strikes_swinging', strikes_swinging,
+                            'ball_swinging', ball_swinging,
+                            'fouls', fouls,
+                            'hard_hit', hard_hit,
+                            'late_swings', late_swings,
+                            'slap', slap,
+                            'qab', qab,
+                            'rbi', rbi,
+                            'br_result', br_result,
+                            'wild_pitch', wild_pitch,
+                            'passed_ball', passed_ball,
+                            'sac', sac,
+                            'br_stolen_bases', br_stolen_bases,
+                            'base_running_hit_around', base_running_hit_around,
+                            'pa_error_on', pa_error_on,
+                            'br_error_on', br_error_on
+                    ) AS details
+                FROM pa_with_round
+            ),
+            -- Group plate appearances by inning
+            rounds_by_inning AS (
+                SELECT
+                    inning_number,
+                    '{{"rounds": {{' || string_agg(
+                        '"' || round_id || '": {{' ||
+                        '"order_number": ' || order_number || ',' ||
+                        '"details": ' || details ||
+                        '}}', 
+                        ', ' ORDER BY round_id
+                    ) || '}}}}' AS rounds_json
+                FROM inning_data
+                GROUP BY inning_number
+                ORDER BY inning_number
+            ),
+            -- Create final JSON with all innings
+            plate_appearances_json AS (
+                SELECT
+                    '{{' || string_agg(
+                        '"' || inning_number || '": ' || rounds_json,
+                        ', ' ORDER BY inning_number
+                    ) || '}}' AS plate_appearances
+                FROM rounds_by_inning
+            )
+            SELECT plate_appearances FROM plate_appearances_json
+        """
+        start_time = time.time()
+        pa_entries = con.execute(pa_duckdb_query).fetchone()
+        query_time = time.time() - start_time
+        logger.info(f"PA query execution time: {query_time:.3f} seconds")
+        
+        if pa_entries is None or len(pa_entries) == 0:
+            print(f"no plate appearance data found for inning {inning_number}")
+            pa_available = "no"
+            pa_entries = {}
+        else:
+            print(f"plate appearance data found for inning {inning_number}")
+            pa_available = "yes"
+            # Parse the JSON string into a Python dict
+            try:
+                pa_entries = json.loads(pa_entries[0])
+            except (json.JSONDecodeError, IndexError, TypeError):
+                print("error parsing plate appearance JSON")
+                pa_available = "no"
+                pa_entries = {}
+    except Exception as e:
+        logger.error(f"Error reading plate appearance info: {str(e)}")
+        pa_available = "no"
+        pa_entries = {}
+    
+    ###########################################################
+    # Structure the response
+    ###########################################################
+    response = {
+        "team_id": team_id_val,
+        "game_id": game_id_val,
+        "team_choice": team_choice,
+        "inning_number": inning_number_val,
+        "pa_available": pa_available,
+        "plate_appearances": pa_entries
+    }
+    
+    # Process array fields in plate appearances
+    start_time = time.time()
+    if pa_available == "yes" and isinstance(pa_entries, dict):
+        array_fields = ["pa_error_on", "br_error_on", "br_stolen_bases", "base_running_hit_around"]
+        for inning_num, inning_data in pa_entries.items():
+            if isinstance(inning_data, dict) and 'rounds' in inning_data:
+                rounds = inning_data.get('rounds', {})
+                for round_id, round_data in rounds.items():
+                    if isinstance(round_data, dict) and 'details' in round_data:
+                        details = round_data['details']
+                        for field in array_fields:
+                            if field in details:
+                                # Process the array field
+                                field_value = details[field]
+                                
+                                # If not a list, convert to a list
+                                if not isinstance(field_value, list):
+                                    if field_value is None or field_value == "":
+                                        field_value = []
+                                    else:
+                                        # Try to convert string representations to list
+                                        if isinstance(field_value, str):
+                                            if field_value.startswith('[') and field_value.endswith(']'):
+                                                try:
+                                                    import ast
+                                                    field_value = ast.literal_eval(field_value)
+                                                except (SyntaxError, ValueError):
+                                                    # If parsing fails, treat as a single item
+                                                    field_value = [field_value]
+                                                else:
+                                                    field_value = [field_value]
+                                            else:
+                                                field_value = [field_value]
+                                        else:
+                                            field_value = [field_value]
+                                
+                                # Process each item in the list to ensure it's a properly typed integer
+                                if field in ["pa_error_on", "br_error_on"]:
+                                    # Baseball positions (0-9)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+                                elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                                    # Base numbers (0-4)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+    processing_time = time.time() - start_time
+    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
+    
+    # Validate the data before returning
+    start_time = time.time()
+    if pa_available == "yes":
+        if not validate_plate_appearances(pa_entries):
+            logger.warning("Invalid plate appearances structure, setting pa_available to 'no'")
+            response["pa_available"] = "no"
+            response["plate_appearances"] = {}
+    validation_time = time.time() - start_time
+    logger.info(f"Validation time: {validation_time:.3f} seconds")
+    
+    return response
+    
+###########################################################
+# 9 - Get plate appearance data for a specific inning only and batter_seq_id - NEW VERSION
+###########################################################
+@router.get("/new/{team_id}/{game_id}/{team_choice}/{inning_number}/scorecardgrid_paonly_inningonly/{batter_seq_id}/pa_edit")
+async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: str, team_choice: str, inning_number: str, batter_seq_id: str):
+    """
+    Get only plate appearance data for a specific inning for a team.
+    This is a new version with a different URL path.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+    except Exception as e:
+        logger.error(f"Error in get_inning_scorecardgrid_paonly_by_inning_new: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+        
+    # Initialize DuckDB connection and get blob service client
+    con = get_duckdb_connection()
+    blob_service_client = get_blob_service_client()
+    container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+    
+    # Convert team_id, game_id, inning_number, and batter_seq_id to integers if possible using utility function
+    team_id_val = safe_int_conversion(team_id)
+    game_id_val = safe_int_conversion(game_id)
+    inning_number_val = safe_int_conversion(inning_number)
+    batter_seq_id_val = safe_int_conversion(batter_seq_id)
+    
+    ###########################################################
+    # Get plate appearance data for specific inning
+    ###########################################################
+    try:
+        pa_duckdb_query = f"""
+            WITH pa_with_round AS (
+                SELECT 
+                    *,
+                    -- Calculate pa_round for each order_number within each inning
+                    ROW_NUMBER() OVER (
+                        PARTITION BY inning_number, order_number 
+                        ORDER BY batter_seq_id
+                    ) AS pa_round
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet')
+            ),
+            -- Organize plate appearances by inning and round
+            inning_data AS (
+                SELECT
+                    inning_number,
+                    batter_seq_id AS round_id,
+                    order_number,
+                    pa_round,
+                    json_object(
+                           'inning_number', inning_number,
+                            'order_number', order_number,
+                            'pa_round', pa_round,
+                            'batter_seq_id', batter_seq_id,
+                            'pa_why', pa_why,
+                            'pa_result', pa_result,
+                            'hit_to', hit_to,
+                            'out', out,
+                            'out_at', out_at,
+                            'balls_before_play', balls_before_play,
+                            'strikes_before_play', strikes_before_play,
+                            'pitch_count', pitch_count,
+                            'strikes_unsure', strikes_unsure,
+                            'strikes_watching', strikes_watching,
+                            'strikes_swinging', strikes_swinging,
+                            'ball_swinging', ball_swinging,
+                            'fouls', fouls,
+                            'hard_hit', hard_hit,
+                            'late_swings', late_swings,
+                            'slap', slap,
+                            'qab', qab,
+                            'rbi', rbi,
+                            'br_result', br_result,
+                            'wild_pitch', wild_pitch,
+                            'passed_ball', passed_ball,
+                            'sac', sac,
+                            'br_stolen_bases', br_stolen_bases,
+                            'base_running_hit_around', base_running_hit_around,
+                            'pa_error_on', pa_error_on,
+                            'br_error_on', br_error_on
+                    ) AS details
+                FROM pa_with_round
+            ),
+            -- Group plate appearances by inning
+            rounds_by_inning AS (
+                SELECT
+                    inning_number,
+                    '{{"rounds": {{' || string_agg(
+                        '"' || round_id || '": {{' ||
+                        '"order_number": ' || order_number || ',' ||
+                        '"details": ' || details ||
+                        '}}', 
+                        ', ' ORDER BY round_id
+                    ) || '}}}}' AS rounds_json
+                FROM inning_data
+                GROUP BY inning_number
+                ORDER BY inning_number
+            ),
+            -- Create final JSON with all innings
+            plate_appearances_json AS (
+                SELECT
+                    '{{' || string_agg(
+                        '"' || inning_number || '": ' || rounds_json,
+                        ', ' ORDER BY inning_number
+                    ) || '}}' AS plate_appearances
+                FROM rounds_by_inning
+            )
+            SELECT plate_appearances FROM plate_appearances_json
+        """
+        start_time = time.time()
+        pa_entries = con.execute(pa_duckdb_query).fetchone()
+        query_time = time.time() - start_time
+        logger.info(f"PA query execution time: {query_time:.3f} seconds")
+        
+        if pa_entries is None or len(pa_entries) == 0:
+            print(f"no plate appearance data found for inning {inning_number}")
+            pa_available = "no"
+            pa_entries = {}
+        else:
+            print(f"plate appearance data found for inning {inning_number}")
+            pa_available = "yes"
+            # Parse the JSON string into a Python dict
+            try:
+                pa_entries = json.loads(pa_entries[0])
+            except (json.JSONDecodeError, IndexError, TypeError):
+                print("error parsing plate appearance JSON")
+                pa_available = "no"
+                pa_entries = {}
+    except Exception as e:
+        logger.error(f"Error reading plate appearance info: {str(e)}")
+        pa_available = "no"
+        pa_entries = {}
+    
+    ###########################################################
+    # Structure the response
+    ###########################################################
+    response = {
+        "team_id": team_id_val,
+        "game_id": game_id_val,
+        "team_choice": team_choice,
+        "inning_number": inning_number_val,
+        "pa_available": pa_available,
+        "plate_appearances": pa_entries
+    }
+    
+    # Process array fields in plate appearances
+    start_time = time.time()
+    if pa_available == "yes" and isinstance(pa_entries, dict):
+        array_fields = ["pa_error_on", "br_error_on", "br_stolen_bases", "base_running_hit_around"]
+        for inning_num, inning_data in pa_entries.items():
+            if isinstance(inning_data, dict) and 'rounds' in inning_data:
+                rounds = inning_data.get('rounds', {})
+                for round_id, round_data in rounds.items():
+                    if isinstance(round_data, dict) and 'details' in round_data:
+                        details = round_data['details']
+                        for field in array_fields:
+                            if field in details:
+                                # Process the array field
+                                field_value = details[field]
+                                
+                                # If not a list, convert to a list
+                                if not isinstance(field_value, list):
+                                    if field_value is None or field_value == "":
+                                        field_value = []
+                                    else:
+                                        # Try to convert string representations to list
+                                        if isinstance(field_value, str):
+                                            if field_value.startswith('[') and field_value.endswith(']'):
+                                                try:
+                                                    import ast
+                                                    field_value = ast.literal_eval(field_value)
+                                                except (SyntaxError, ValueError):
+                                                    # If parsing fails, treat as a single item
+                                                    field_value = [field_value]
+                                                else:
+                                                    field_value = [field_value]
+                                            else:
+                                                field_value = [field_value]
+                                        else:
+                                            field_value = [field_value]
+                                
+                                # Process each item in the list to ensure it's a properly typed integer
+                                if field in ["pa_error_on", "br_error_on"]:
+                                    # Baseball positions (0-9)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 9:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+                                elif field in ["br_stolen_bases", "base_running_hit_around"]:
+                                    # Base numbers (0-4)
+                                    processed_items = []
+                                    for item in field_value:
+                                        try:
+                                            if isinstance(item, (int, float)) and not pd.isna(item):
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                            elif isinstance(item, str) and item.isdigit():
+                                                val = int(item)
+                                                if 0 <= val <= 4:
+                                                    processed_items.append(val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    details[field] = processed_items
+    processing_time = time.time() - start_time
+    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
+    
+    # Validate the data before returning
+    start_time = time.time()
+    if pa_available == "yes":
+        if not validate_plate_appearances(pa_entries):
+            logger.warning("Invalid plate appearances structure, setting pa_available to 'no'")
+            response["pa_available"] = "no"
+            response["plate_appearances"] = {}
+    validation_time = time.time() - start_time
+    logger.info(f"Validation time: {validation_time:.3f} seconds")
+    
+    return response
+    
