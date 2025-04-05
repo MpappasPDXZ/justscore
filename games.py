@@ -68,6 +68,20 @@ async def list_games(team_id: str):
                         *
                     FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_*.parquet', union_by_name=true)
                 ),
+                sorted_game_data AS (
+                    SELECT *
+                    FROM game_data
+                    ORDER BY 
+                        -- First try to sort by year, which is at positions 7-10 in MM-DD-YYYY format
+                        CASE WHEN LENGTH(event_date) >= 10 THEN SUBSTRING(event_date, 7, 4) ELSE '0000' END DESC,
+                        -- Then by month (positions 1-2)
+                        CASE WHEN LENGTH(event_date) >= 5 THEN SUBSTRING(event_date, 1, 2) ELSE '00' END DESC,
+                        -- Finally by day (positions 4-5)
+                        CASE WHEN LENGTH(event_date) >= 5 THEN SUBSTRING(event_date, 4, 2) ELSE '00' END DESC,
+                        -- Also include hour and minute for events on the same day
+                        event_hour DESC,
+                        event_minute DESC
+                ),
                 game_count AS (
                     SELECT COUNT(*) as count FROM game_data
                 )
@@ -94,8 +108,7 @@ async def list_games(team_id: str):
                         ),
                         '[]'
                     ) as games
-                FROM game_data
-                LIMIT 1
+                FROM sorted_game_data
             """
             result = con.execute(query).fetchone()
 
