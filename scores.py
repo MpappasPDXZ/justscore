@@ -1355,17 +1355,14 @@ async def get_inning_scorecardgrid_paonly(team_id: str, game_id: str, team_choic
         logger.info(f"PA query execution time: {query_time:.3f} seconds")
         
         if pa_entries is None or len(pa_entries) == 0:
-            print("no plate appearance data found")
             pa_available = "no"
             pa_entries = {}
         else:
-            print("plate appearance data found")
             pa_available = "yes"
             # Parse the JSON string into a Python dict
             try:
                 pa_entries = json.loads(pa_entries[0])
             except (json.JSONDecodeError, IndexError, TypeError):
-                print("error parsing plate appearance JSON")
                 pa_available = "no"
                 pa_entries = {}
     except Exception as e:
@@ -1454,7 +1451,6 @@ async def get_inning_scorecardgrid_paonly(team_id: str, game_id: str, team_choic
                                             pass
                                     details[field] = processed_items
     processing_time = time.time() - start_time
-    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
     
     # Validate the data before returning
     start_time = time.time()
@@ -1464,7 +1460,6 @@ async def get_inning_scorecardgrid_paonly(team_id: str, game_id: str, team_choic
             response["pa_available"] = "no"
             response["plate_appearances"] = {}
     validation_time = time.time() - start_time
-    logger.info(f"Validation time: {validation_time:.3f} seconds")
     
     return response
     
@@ -1588,17 +1583,14 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
         logger.info(f"PA query execution time: {query_time:.3f} seconds")
         
         if pa_entries is None or len(pa_entries) == 0:
-            print(f"no plate appearance data found for inning {inning_number}")
             pa_available = "no"
             pa_entries = {}
         else:
-            print(f"plate appearance data found for inning {inning_number}")
             pa_available = "yes"
             # Parse the JSON string into a Python dict
             try:
                 pa_entries = json.loads(pa_entries[0])
             except (json.JSONDecodeError, IndexError, TypeError):
-                print("error parsing plate appearance JSON")
                 pa_available = "no"
                 pa_entries = {}
     except Exception as e:
@@ -1688,7 +1680,6 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
                                             pass
                                     details[field] = processed_items
     processing_time = time.time() - start_time
-    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
     
     # Validate the data before returning
     start_time = time.time()
@@ -1698,7 +1689,6 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
             response["pa_available"] = "no"
             response["plate_appearances"] = {}
     validation_time = time.time() - start_time
-    logger.info(f"Validation time: {validation_time:.3f} seconds")
     
     return response
     
@@ -1822,17 +1812,14 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
         logger.info(f"PA query execution time: {query_time:.3f} seconds")
         
         if pa_entries is None or len(pa_entries) == 0:
-            print(f"no plate appearance data found for inning {inning_number}")
             pa_available = "no"
             pa_entries = {}
         else:
-            print(f"plate appearance data found for inning {inning_number}")
             pa_available = "yes"
             # Parse the JSON string into a Python dict
             try:
                 pa_entries = json.loads(pa_entries[0])
             except (json.JSONDecodeError, IndexError, TypeError):
-                print("error parsing plate appearance JSON")
                 pa_available = "no"
                 pa_entries = {}
     except Exception as e:
@@ -1922,7 +1909,6 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
                                             pass
                                     details[field] = processed_items
     processing_time = time.time() - start_time
-    logger.info(f"Array field processing time: {processing_time:.3f} seconds")
     
     # Validate the data before returning
     start_time = time.time()
@@ -1932,7 +1918,6 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
             response["pa_available"] = "no"
             response["plate_appearances"] = {}
     validation_time = time.time() - start_time
-    logger.info(f"Validation time: {validation_time:.3f} seconds")
     
     return response
     
