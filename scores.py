@@ -105,6 +105,7 @@ class ScoreData(BaseModel):
     detailed_result: str
     hard_hit: int  # 1 for yes, 0 for no
     slap: int  # 1 for yes, 0 for no
+    bunt: int  # 1 for yes, 0 for no
     late_swings: int  # 1 for yes, 0 for no
     bunt_or_slap: int  # 1 for bunt, 2 for slap, 0 for no
     base_running: str
@@ -135,6 +136,7 @@ class PlateAppearanceData(BaseModel):
     qab: int = Field(..., ge=0, le=1)
     hard_hit: int = Field(..., ge=0, le=1)
     slap: int = Field(..., ge=0, le=1)
+    bunt: int = Field(..., ge=0, le=1)
     sac: int = Field(..., ge=0, le=1)
     out_at: int = Field(..., ge=0, le=4)
     pa_why: Optional[str]
@@ -788,7 +790,7 @@ async def get_inning_scorebook(team_id: str, game_id: str, inning_number: str, t
             "inning_number": 0, "late_swings": 0, "my_team_ha": "", 
             "order_number": 0, "out": 0, "out_at": 0, "pa_error_on": [], 
             "pa_result": "", "pa_why": "", "passed_ball": 0, "pitch_count": 0, 
-            "qab": 0, "rbi": 0, "sac": 0, "slap": 0, "strikes_before_play": 0, 
+            "qab": 0, "rbi": 0, "sac": 0, "slap": 0, "bunt": 0, "strikes_before_play": 0, 
             "strikes_swinging": 0, "strikes_unsure": 0, "strikes_watching": 0, 
             "team_id": "", "teamId": "", "wild_pitch": 0
         }
@@ -1082,6 +1084,7 @@ async def get_inning_scorecardgrid(team_id: str, game_id: str, team_choice: str)
                             'hard_hit', hard_hit,
                             'late_swings', late_swings,
                             'slap', slap,
+                            'bunt', bunt,
                             'qab', qab,
                             'rbi', rbi,
                             'br_result', br_result,
@@ -1310,6 +1313,7 @@ async def get_inning_scorecardgrid_paonly(team_id: str, game_id: str, team_choic
                             'hard_hit', hard_hit,
                             'late_swings', late_swings,
                             'slap', slap,
+                            'bunt', bunt,
                             'qab', qab,
                             'rbi', rbi,
                             'br_result', br_result,
@@ -1538,6 +1542,7 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
                             'hard_hit', hard_hit,
                             'late_swings', late_swings,
                             'slap', slap,
+                            'bunt', bunt,
                             'qab', qab,
                             'rbi', rbi,
                             'br_result', br_result,
@@ -1767,6 +1772,7 @@ async def get_inning_scorecardgrid_paonly_by_inning_new(team_id: str, game_id: s
                             'hard_hit', hard_hit,
                             'late_swings', late_swings,
                             'slap', slap,
+                            'bunt', bunt,
                             'qab', qab,
                             'rbi', rbi,
                             'br_result', br_result,
