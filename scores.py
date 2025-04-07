@@ -633,13 +633,13 @@ async def get_game_summary(team_id: str, game_id: str):
 
 
 ###########################################################
-# 6 - Get plate appearance data for a specific inning only - EXACT QUERY VERSION
+# 6 - Get plate appearance data for a specific inning only - FAST VERSION
 ###########################################################
-@router.get("/new2/{team_id}/{game_id}/{team_choice}/{inning_number}/scorecardgrid_paonly_inningonly_exact")
-async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id: str, team_choice: str, inning_number: str):
+@router.get("/fast/{team_id}/{game_id}/{team_choice}/{inning_number}/score_card_grid_one_inning")
+async def get_inning_scorecardgrid_fast(team_id: str, game_id: str, team_choice: str, inning_number: str):
     """
-    Get only plate appearance data for a specific inning for a team.
-    Uses the exact DuckDB query and then nests by pa_round.
+    Get plate appearance data for a specific inning for a team.
+    Uses a direct DuckDB query without nesting by pa_round for faster performance.
     """
     try:
         if team_choice not in ['home', 'away']:
@@ -656,24 +656,17 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
         game_id_val = safe_int_conversion(game_id)
         inning_number_val = safe_int_conversion(inning_number)
         
-        # Use a query that correctly calculates pa_round:
-        # - First, we get a numbered list of order_number occurrences within the inning
-        # - Then we use that to determine the pa_round
+        # Use a query that calculates pa_round directly in the source_data
         pa_duckdb_query = f"""
             WITH source_data AS (
-                SELECT *
-                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
-            ),
-            order_occurrences AS (
-                SELECT 
-                    *,
+                SELECT *,
                     -- Assign a dense rank to each unique order_number within this inning
                     -- This will be the pa_round for each order position
                     DENSE_RANK() OVER (
                         PARTITION BY order_number 
                         ORDER BY batter_seq_id
                     ) AS pa_round
-                FROM source_data
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
             )
             SELECT
                 json_object(
@@ -682,9 +675,10 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
                         'game_id', {game_id_val},
                         'team_choice', '{team_choice}',
                         'inning_number', {inning_number_val},
+                        'pa_round', pa_round,
                         'batter_seq_id', batter_seq_id,
                         'order_number', order_number,
-                        'pa_round', pa_round,
+
                         -- PA details
                         'pa_why', pa_why,
                         'pa_result', pa_result,
@@ -709,13 +703,13 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
                         'wild_pitch', wild_pitch,
                         'passed_ball', passed_ball,
                         'sac', sac,
-                        'br_stolen_bases', br_stolen_bases,
-                        'base_running_hit_around', base_running_hit_around,
-                        'pa_error_on', pa_error_on,
-                        'br_error_on', br_error_on
+                        'br_stolen_bases', CASE WHEN br_stolen_bases IS NULL THEN '[]' ELSE json_array(br_stolen_bases) END,
+                        'base_running_hit_around', CASE WHEN base_running_hit_around IS NULL THEN '[]' ELSE json_array(base_running_hit_around) END,
+                        'pa_error_on', CASE WHEN pa_error_on IS NULL THEN '[]' ELSE json_array(pa_error_on) END,
+                        'br_error_on', CASE WHEN br_error_on IS NULL THEN '[]' ELSE json_array(br_error_on) END
                 ) AS details
-            FROM order_occurrences
-            ORDER BY order_number, pa_round
+            FROM source_data
+            ORDER BY pa_round, order_number
         """
         
         # Execute the query and get results as JSON strings
@@ -729,7 +723,7 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
                 "team_choice": team_choice,
                 "inning_number": inning_number_val,
                 "pa_available": "no",
-                "pa_rounds": {}
+                "scorebook_entries": []
             }
             
         # Parse each JSON string to a dictionary
@@ -741,38 +735,21 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
             except (json.JSONDecodeError, IndexError) as e:
                 logger.error(f"Error parsing JSON: {str(e)}")
                 continue
-                
-        # Now nest by pa_round at the very end (using pa_round as the key)
-        pa_by_round = {}
         
-        for details in pa_details_list:
-            pa_round_val = str(details.get('pa_round', '0'))
-            
-            # Initialize the pa_round entry if it doesn't exist
-            if pa_round_val not in pa_by_round:
-                pa_by_round[pa_round_val] = []
-            
-            # Add to list of batters for this pa_round
-            pa_by_round[pa_round_val].append(details)
-        
-        # Sort batters by batter_seq_id within each pa_round
-        sorted_pa_by_round = {}
-        for pa_round, batters in pa_by_round.items():
-            # Sort the batters list by order_number first, then by batter_seq_id
-            sorted_batters = sorted(batters, key=lambda x: (int(x.get('order_number', 0)), int(x.get('batter_seq_id', 0))))
-            sorted_pa_by_round[pa_round] = sorted_batters
+        # Sort the entire list by order_number and then by pa_round
+        sorted_pa_list = sorted(pa_details_list, key=lambda x: (int(x.get('order_number', 0)), int(x.get('pa_round', 0))))
         
         return {
             "team_id": team_id_val,
             "game_id": game_id_val,
             "team_choice": team_choice,
             "inning_number": inning_number_val,
-            "pa_available": "yes" if sorted_pa_by_round else "no",
-            "pa_rounds": sorted_pa_by_round
+            "pa_available": "yes" if sorted_pa_list else "no",
+            "scorebook_entries": sorted_pa_list
         }
         
     except Exception as e:
-        logger.error(f"Error in get_inning_scorecardgrid_paonly_by_inning_exact: {str(e)}")
+        logger.error(f"Error in get_inning_scorecardgrid_fast: {str(e)}")
         import traceback
         error_details = traceback.format_exc()
         logger.error(error_details)
@@ -783,7 +760,7 @@ async def get_inning_scorecardgrid_paonly_by_inning_exact(team_id: str, game_id:
             "team_choice": team_choice,
             "inning_number": inning_number_val if 'inning_number_val' in locals() else inning_number,
             "pa_available": "no",
-            "pa_rounds": {},
+            "scorebook_entries": [],
             "error": str(e)
         }
 
