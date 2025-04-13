@@ -295,6 +295,34 @@ async def save_plate_appearance(pa_data: dict = Body(...)):
         print("----------------------------------------------")
         # Convert to DataFrame
         df = pd.DataFrame([pa_data])
+        team_id_val = safe_int_conversion(pa_data['team_id'])
+        game_id_val = safe_int_conversion(pa_data['game_id'])
+        inning_number_val = safe_int_conversion(pa_data['inning_number'])
+        order_number_val = safe_int_conversion(pa_data['order_number'])
+        batter_seq_id_val = safe_int_conversion(pa_data['batter_seq_id'])
+        team_choice = pa_data['home_or_away']
+        #I need to compute the round from other data in the blob.
+        try:
+            con = get_duckdb_connection()
+            query = f"""
+                SELECT 
+                COALESCE(count(*),0)+1 as round
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet', union_by_name=True)
+                WHERE
+                    CAST(order_number AS INT) = {order_number_val}
+                    AND
+                    CAST(batter_seq_id AS INT) < {batter_seq_id_val}
+        """
+            round_df = con.execute(query).fetchdf()
+            # Convert numpy.int64 to native Python int
+            round_number = int(round_df['round'].iloc[0]) if not round_df.empty else 1
+        except Exception as e:
+            round_number = 1
+        # Add the round number to the plate appearance data
+        pa_data['pa_round'] = round_number
+        
+        # Convert to DataFrame for saving the plate appearance
+        df = pd.DataFrame([pa_data])
         team_data_key = "home" if pa_data["home_or_away"] == "home" else "away"
         blob_name = f"games/team_{pa_data['team_id']}/game_{pa_data['game_id']}/inning_{pa_data['inning_number']}/{team_data_key}_{pa_data['batter_seq_id']}.parquet"
         parquet_buffer = BytesIO()
@@ -305,17 +333,13 @@ async def save_plate_appearance(pa_data: dict = Body(...)):
         blob_client = container_client.get_blob_client(blob_name)
         blob_client.upload_blob(parquet_buffer, overwrite=True)
 
-        #print("------1A - SAVE PA DF (*) ------------")
-        #print(f"calculate inning score batters_dfcolumns: {list(df.columns)}")
-        #print(f"First row sample: {df.iloc[0].to_dict() if not df.empty else 'No data'}")
-        #print("----------------------------------------------")
-        
         return {
             "status": "success",
             "message": f"Plate appearance data saved for team {pa_data['team_id']}, game {pa_data['game_id']}, inning {pa_data['inning_number']}, batter sequence {pa_data['batter_seq_id']}",
             "blob_path": blob_name,
             "team_choice": pa_data["home_or_away"],
-            "my_team_ha": pa_data.get("my_team_ha", "home")
+            "my_team_ha": pa_data.get("my_team_ha", "home"),
+            "round_from_pa_save": round_number
         }
     except HTTPException:
         raise
