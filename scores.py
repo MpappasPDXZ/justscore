@@ -155,6 +155,7 @@ class PlateAppearanceData(BaseModel):
     strikes_swinging: int = Field(..., ge=0, le=2)
     ball_swinging: int = Field(..., ge=0, le=2)
     fouls: int = Field(0, ge=0, le=50)  # Adding fouls field with default value
+    #pa_round is passed in at as int and must be between 1 and 25
 
     @field_validator('home_or_away', 'my_team_ha')
     def validate_home_away(cls, v):
@@ -796,6 +797,19 @@ async def get_inning_scorecardgrid_paonly_by_inning_new_pa_edit(team_id: str, ga
     inning_number_val = safe_int_conversion(inning_number)
     batter_seq_id_val = safe_int_conversion(batter_seq_id)
     
+    # Check if the target file exists first
+    target_blob_name = f"games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet"
+    blob_client = container_client.get_blob_client(target_blob_name)
+    if not blob_exists(blob_client):
+        return {
+            "team_id": team_id_val,
+            "game_id": game_id_val,
+            "team_choice": team_choice,
+            "inning_number": inning_number_val,
+            "batter_seq_id": batter_seq_id_val,
+            "error": "No plate appearance data found"
+        }
+    
     ###########################################################
     # Get plate appearance data for specific inning
     ###########################################################
@@ -803,13 +817,22 @@ async def get_inning_scorecardgrid_paonly_by_inning_new_pa_edit(team_id: str, ga
         pa_duckdb_query = f"""
             WITH src AS (
                 SELECT 
-                    *,
+                    order_number,
+                    batter_seq_id,
                     -- Calculate pa_round for each order_number within each inning
                     ROW_NUMBER() OVER (
                         PARTITION BY inning_number, order_number 
                         ORDER BY batter_seq_id
                     ) AS pa_round
-                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet')
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
+                WHERE order_number = (
+                    SELECT order_number 
+                    FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet')
+                    LIMIT 1
+                )
+                ),
+                target_pa AS (
+                    SELECT * FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet')
                 )
                 SELECT
                     json_object(
@@ -819,38 +842,39 @@ async def get_inning_scorecardgrid_paonly_by_inning_new_pa_edit(team_id: str, ga
                             'team_choice', '{team_choice}',
                             'inning_number', {inning_number_val},
                             'batter_seq_id', {batter_seq_id_val},
-                            'order_number', order_number,
-                            'pa_round', pa_round,
+                            'order_number', target_pa.order_number,
+                            'pa_round', src.pa_round,
                             -- PA details
-                            'pa_why', pa_why,
-                            'pa_result', pa_result,
-                            'hit_to', hit_to,
-                            'out', out,
-                            'out_at', out_at,
-                            'balls_before_play', balls_before_play,
-                            'strikes_before_play', strikes_before_play,
-                            'pitch_count', pitch_count,
-                            'strikes_unsure', strikes_unsure,
-                            'strikes_watching', strikes_watching,
-                            'strikes_swinging', strikes_swinging,
-                            'ball_swinging', ball_swinging,
-                            'fouls', fouls,
-                            'hard_hit', hard_hit,
-                            'late_swings', late_swings,
-                            'slap', slap,
-                            'bunt', bunt,
-                            'qab', qab,
-                            'rbi', rbi,
-                            'br_result', br_result,
-                            'wild_pitch', wild_pitch,
-                            'passed_ball', passed_ball,
-                            'sac', sac,
-                            'br_stolen_bases', br_stolen_bases,
-                            'base_running_hit_around', base_running_hit_around,
-                            'pa_error_on', pa_error_on,
-                            'br_error_on', br_error_on
+                            'pa_why', target_pa.pa_why,
+                            'pa_result', target_pa.pa_result,
+                            'hit_to', target_pa.hit_to,
+                            'out', target_pa.out,
+                            'out_at', target_pa.out_at,
+                            'balls_before_play', target_pa.balls_before_play,
+                            'strikes_before_play', target_pa.strikes_before_play,
+                            'pitch_count', target_pa.pitch_count,
+                            'strikes_unsure', target_pa.strikes_unsure,
+                            'strikes_watching', target_pa.strikes_watching,
+                            'strikes_swinging', target_pa.strikes_swinging,
+                            'ball_swinging', target_pa.ball_swinging,
+                            'fouls', target_pa.fouls,
+                            'hard_hit', target_pa.hard_hit,
+                            'late_swings', target_pa.late_swings,
+                            'slap', target_pa.slap,
+                            'bunt', target_pa.bunt,
+                            'qab', target_pa.qab,
+                            'rbi', target_pa.rbi,
+                            'br_result', target_pa.br_result,
+                            'wild_pitch', target_pa.wild_pitch,
+                            'passed_ball', target_pa.passed_ball,
+                            'sac', target_pa.sac,
+                            'br_stolen_bases', target_pa.br_stolen_bases,
+                            'base_running_hit_around', target_pa.base_running_hit_around,
+                            'pa_error_on', target_pa.pa_error_on,
+                            'br_error_on', target_pa.br_error_on
                     ) AS details
-                FROM src
+                FROM target_pa
+                JOIN src ON target_pa.order_number = src.order_number
         """
         start_time = time.time()
         pa_entries = con.execute(pa_duckdb_query).fetchone()
@@ -940,6 +964,23 @@ async def get_inning_scorecardgrid_paonly_by_inning_new_pa_edit(team_id: str, ga
                             pass
                     pa_details[field] = processed_items
         
+        # Debug: Print all plate appearances for this order number
+        debug_query = f"""
+            SELECT batter_seq_id, order_number, inning_number
+            FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
+            WHERE order_number = (
+                SELECT order_number 
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_{batter_seq_id_val}.parquet')
+                LIMIT 1
+            )
+            ORDER BY batter_seq_id;
+        """
+        debug_results = con.execute(debug_query).fetchall()
+        with open('debug_pa.log', 'w') as f:
+            f.write("DEBUG - All plate appearances for this order number:\n")
+            for row in debug_results:
+                f.write(f"batter_seq_id: {row[0]}, order_number: {row[1]}, inning_number: {row[2]}\n")
+        
         # Return the flat structure directly
         return pa_details
         
@@ -952,3 +993,197 @@ async def get_inning_scorecardgrid_paonly_by_inning_new_pa_edit(team_id: str, ga
         "batter_seq_id": batter_seq_id_val,
         "error": "No plate appearance data found"
     }
+
+###########################################################
+# 8 - Calculate next batter_seq_id
+###########################################################
+@router.get("/new/{team_id}/{game_id}/{team_choice}/{inning_number}/next_batter_seq_id")
+async def get_next_batter_seq_id(team_id: str, game_id: str, team_choice: str, inning_number: str):
+    """
+    Calculate the next batter_seq_id for a given team, game, and inning.
+    Returns the next available batter_seq_id (max + 1).
+    If no batters exist yet, returns 1.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+        
+        # Convert parameters to integers if possible
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        inning_number_val = safe_int_conversion(inning_number)
+        
+        # Initialize DuckDB connection
+        con = get_duckdb_connection()
+        
+        try:
+            # Query to get the maximum batter_seq_id from the actual data
+            query = f"""
+                SELECT COALESCE(MAX(batter_seq_id), 0) + 1 as next_batter_seq_id
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
+            """
+            
+            result = con.execute(query).fetchone()
+            next_batter_seq_id = result[0] if result else 1
+            logger.info(f"next_batter_seq_id: {next_batter_seq_id}")
+        except Exception as e:
+            # If there's any error reading the parquet files (including if they don't exist),
+            # return 1 as this is the first batter
+            next_batter_seq_id = 1
+        
+        return {
+            "team_id": team_id_val,
+            "game_id": game_id_val,
+            "team_choice": team_choice,
+            "inning_number": inning_number_val,
+            "next_batter_seq_id": next_batter_seq_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating next batter_seq_id: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating next batter_seq_id: {str(e)}"
+        )
+
+###########################################################
+# 9 - Get plate appearance data for a specific inning and round
+###########################################################
+@router.get("/fast/{team_id}/{game_id}/{team_choice}/{inning_number}/score_card_grid_one_inning/{pa_round}")
+async def get_inning_scorecardgrid_by_round(team_id: str, game_id: str, team_choice: str, inning_number: str, pa_round: str):
+    """
+    Get plate appearance data for a specific inning and round for a team.
+    Uses a direct DuckDB query without nesting by pa_round for faster performance.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+        
+        # Initialize DuckDB connection
+        con = get_duckdb_connection()
+        
+        # Convert parameters to integers if possible
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        inning_number_val = safe_int_conversion(inning_number)
+        pa_round_val = safe_int_conversion(pa_round)
+        
+        # Use a query that calculates pa_round directly in the source_data
+        pa_duckdb_query = f"""
+            WITH source_data AS (
+                SELECT *,
+                    -- Assign a dense rank to each unique order_number within this inning
+                    -- This will be the pa_round for each order position
+                    DENSE_RANK() OVER (
+                        PARTITION BY order_number 
+                        ORDER BY batter_seq_id
+                    ) AS pa_round
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/inning_{inning_number_val}/{team_choice}_*.parquet')
+            )
+            SELECT
+                json_object(
+                        --PA header 
+                        'team_id', {team_id_val},
+                        'game_id', {game_id_val},
+                        'team_choice', '{team_choice}',
+                        'inning_number', {inning_number_val},
+                        'pa_round', pa_round,
+                        'batter_seq_id', batter_seq_id,
+                        'order_number', order_number,
+
+                        -- PA details
+                        'pa_why', pa_why,
+                        'pa_result', pa_result,
+                        'hit_to', hit_to,
+                        'out', out,
+                        'out_at', out_at,
+                        'balls_before_play', balls_before_play,
+                        'strikes_before_play', strikes_before_play,
+                        'pitch_count', pitch_count,
+                        'strikes_unsure', strikes_unsure,
+                        'strikes_watching', strikes_watching,
+                        'strikes_swinging', strikes_swinging,
+                        'ball_swinging', ball_swinging,
+                        'fouls', fouls,
+                        'hard_hit', hard_hit,
+                        'late_swings', late_swings,
+                        'slap', slap,
+                        'bunt', bunt,
+                        'qab', qab,
+                        'rbi', rbi,
+                        'br_result', br_result,
+                        'wild_pitch', wild_pitch,
+                        'passed_ball', passed_ball,
+                        'sac', sac,
+                        'br_stolen_bases', CASE WHEN br_stolen_bases IS NULL THEN '[]' ELSE json_array(br_stolen_bases) END,
+                        'base_running_hit_around', CASE WHEN base_running_hit_around IS NULL THEN '[]' ELSE json_array(base_running_hit_around) END,
+                        'pa_error_on', CASE WHEN pa_error_on IS NULL THEN '[]' ELSE json_array(pa_error_on) END,
+                        'br_error_on', CASE WHEN br_error_on IS NULL THEN '[]' ELSE json_array(br_error_on) END
+                ) AS details
+            FROM source_data
+            WHERE pa_round = {pa_round_val}
+            ORDER BY order_number
+        """
+        
+        # Execute the query and get results as JSON strings
+        result_rows = con.execute(pa_duckdb_query).fetchall()
+            
+        # Handle empty results
+        if not result_rows:
+            return {
+                "team_id": team_id_val,
+                "game_id": game_id_val,
+                "team_choice": team_choice,
+                "inning_number": inning_number_val,
+                "pa_round": pa_round_val,
+                "pa_available": "no",
+                "scorebook_entries": []
+            }
+            
+        # Parse each JSON string to a dictionary
+        pa_details_list = []
+        for row in result_rows:
+            try:
+                details_dict = json.loads(row[0])
+                pa_details_list.append(details_dict)
+            except (json.JSONDecodeError, IndexError) as e:
+                logger.error(f"Error parsing JSON: {str(e)}")
+                continue
+                        
+        # Sort the entire list by order_number
+        sorted_pa_list = sorted(pa_details_list, key=lambda x: int(x.get('order_number', 0)))
+            
+        return {
+            "team_id": team_id_val,
+            "game_id": game_id_val,
+            "team_choice": team_choice,
+            "inning_number": inning_number_val,
+            "pa_round": pa_round_val,
+            "pa_available": "yes" if sorted_pa_list else "no",
+            "scorebook_entries": sorted_pa_list
+        }
+                
+    except Exception as e:
+        logger.error(f"Error in get_inning_scorecardgrid_by_round: {str(e)}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(error_details)
+        
+        return {
+            "team_id": team_id_val if 'team_id_val' in locals() else team_id,
+            "game_id": game_id_val if 'game_id_val' in locals() else game_id,
+            "team_choice": team_choice,
+            "inning_number": inning_number_val if 'inning_number_val' in locals() else inning_number,
+            "pa_round": pa_round_val if 'pa_round_val' in locals() else pa_round,
+            "pa_available": "no",
+            "scorebook_entries": [],
+            "error": str(e)
+        }
