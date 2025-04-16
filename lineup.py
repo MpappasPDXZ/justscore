@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from io import BytesIO
 from typing import Optional, List, Union
 import pandas as pd
+import json
 
 router = APIRouter()
 
@@ -846,4 +847,198 @@ async def get_batters_by_inning(team_id: str, game_id: str, team_choice: str):
         raise HTTPException(
             status_code=500,
             detail=f"Error getting batters by inning: {str(e)}"
+        )
+
+###########################################################
+# 11 - Get lineup information for a team's innings
+###########################################################
+@router.get("/{team_id}/{game_id}/{team_choice}/rotations")
+async def get_lineup_positions(team_id: str, game_id: str, team_choice: str):
+    """
+    Get lineup information showing each player's positions across all innings.
+    Returns a player-centric view with positions by inning.
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+        team_id_val = safe_int_conversion(team_id)
+        game_id_val = safe_int_conversion(game_id)
+        # Get DuckDB connection
+        con = get_duckdb_connection()
+        # Query to get player positions across innings
+        lineup_query = f"""
+            WITH player_data AS (
+                SELECT DISTINCT
+                    jersey_number,
+                    player_name
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/defense/{team_choice}_defense_*.parquet')
+            ),
+            position_data AS (
+                SELECT 
+                    jersey_number,
+                    player_name,
+                    inning_number,
+                    position_number
+                FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id_val}/game_{game_id_val}/defense/{team_choice}_defense_*.parquet')
+            )
+            SELECT 
+                pd.jersey_number,
+                pd.player_name,
+                json_group_array(
+                    json_object(
+                        'inning', pos.inning_number,
+                        'position', pos.position_number
+                    )
+                ) as positions
+            FROM player_data pd
+            LEFT JOIN position_data pos 
+                ON pd.jersey_number = pos.jersey_number 
+                AND pd.player_name = pos.player_name
+            GROUP BY pd.jersey_number, pd.player_name
+            ORDER BY pd.jersey_number
+        """
+        
+        # Execute the query and get results
+        result_rows = con.execute(lineup_query).fetchall()
+        
+        # Process the results into player-centric format
+        players = []
+        for row in result_rows:
+            jersey_number = row[0]
+            player_name = row[1]
+            positions_data = json.loads(row[2])
+            
+            # Initialize positions dictionary with None for all innings
+            positions = {str(i): None for i in range(1, 8)}  # innings 1-7
+            
+            # Fill in the actual positions
+            for pos in positions_data:
+                inning = str(pos['inning'])
+                if inning in positions:
+                    positions[inning] = pos['position']
+            
+            players.append({
+                "jersey_number": jersey_number,
+                "player_name": player_name,
+                "display": f"{jersey_number} - {player_name}",
+                "positions": positions
+            })
+        
+        # Sort players by jersey number
+        players.sort(key=lambda x: int(x['jersey_number']) if x['jersey_number'].isdigit() else float('inf'))
+        
+        return {
+            "team_id": team_id_val,
+            "game_id": game_id_val,
+            "team_choice": team_choice,
+            "column_headers": ["Jersey - Name"] + [f"Inning {i}" for i in range(1, 8)],
+            "players": players
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in get_lineup_positions: {str(e)}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(error_details)
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving lineup information: {str(e)}"
         ) 
+
+@router.get("/{team_id}/{game_id}/{team_choice}/positions")
+async def get_position_rotations(team_id: str, game_id: str, team_choice: str):
+    """
+    Get lineup information organized by defensive position across all innings.
+    Returns flattened position-centric view with each position's player by inning.
+    Player display format: 'XX - Lastname'
+    """
+    try:
+        if team_choice not in ['home', 'away']:
+            raise HTTPException(
+                status_code=400,
+                detail="team_choice must be 'home' or 'away'"
+            )
+        
+        # Get DuckDB connection
+        con = get_duckdb_connection()
+        
+        # First, get the maximum inning number from the data
+        max_inning_query = f"""
+            SELECT CAST(COALESCE(MAX(inning_number), 7) AS INTEGER) as max_inning
+            FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/defense/{team_choice}_defense_*.parquet')
+        """
+        max_inning = max(7, con.execute(max_inning_query).fetchone()[0])
+        
+        # Query to get position data across innings with name formatting
+        position_query = f"""
+            SELECT 
+                CAST(position_number AS INTEGER) as position,
+                CAST(inning_number AS INTEGER) as inning,
+                jersey_number,
+                SPLIT_PART(player_name, ' ', -1) as last_name,
+                jersey_number || '-' || LEFT(SPLIT_PART(player_name, ' ', -1), 5) as display
+            FROM read_parquet('azure://{CONTAINER_NAME}/games/team_{team_id}/game_{game_id}/defense/{team_choice}_defense_*.parquet')
+            WHERE position_number BETWEEN 1 AND 9
+            ORDER BY 
+                position_number,
+                inning_number
+        """
+        
+        # Execute the query and get results
+        result_rows = con.execute(position_query).fetchall()
+        
+        # Initialize the flattened structure
+        positions_by_inning = {}
+        for pos in range(1, 10):  # Positions 1-9
+            positions_by_inning[pos] = {
+                "position": pos,
+                "position_name": get_position_name(pos)
+            }
+            # Initialize innings with empty strings
+            for inning in range(1, max_inning + 1):
+                positions_by_inning[pos][f"inning_{inning}"] = ""
+        
+        # Fill in the actual data
+        for row in result_rows:
+            position = row[0]
+            inning = row[1]
+            display = row[4]  # jersey_number - Lastname
+            if position in positions_by_inning and inning <= max_inning:
+                positions_by_inning[position][f"inning_{inning}"] = display
+        
+        # Convert to list and sort by position
+        positions_data = list(positions_by_inning.values())
+        
+        return {
+            "team_id": int(team_id),
+            "game_id": int(game_id),
+            "team_choice": team_choice,
+            "max_inning": max_inning,
+            "positions": positions_data
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in get_position_rotations: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving position information: {str(e)}"
+        )
+
+def get_position_name(position_number: int) -> str:
+    """Helper function to get position names"""
+    position_names = {
+        1: "Pitcher",
+        2: "Catcher",
+        3: "First Base",
+        4: "Second Base",
+        5: "Third Base",
+        6: "Shortstop",
+        7: "Left Field",
+        8: "Center Field",
+        9: "Right Field"
+    }
+    return position_names.get(position_number, "Unknown") 

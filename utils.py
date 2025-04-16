@@ -61,6 +61,14 @@ def count_errors(error_array):
     except Exception as e:
         print(f"Error counting: {str(e)}")
         return 0
+def safe_int_conversion(value):
+    """
+    Safely convert a value to integer if it's a digit string.
+    Otherwise, return the original value.
+    """
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return value
 
 def process_array_field(value):
     """Helper function to process array-type fields"""
